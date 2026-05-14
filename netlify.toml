@@ -1,8 +1,5 @@
 [build]
   publish = "."
 
-# Serve dispatch-hq.html at the root URL (keeps URL clean)
-[[redirects]]
-  from = "/"
-  to = "/dispatch-hq.html"
-  status = 200
+[build.environment]
+  NODE_VERSION = "20"
