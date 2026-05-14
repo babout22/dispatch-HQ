@@ -1,0 +1,25 @@
+# Netlify _headers file
+# Place this file in the same folder as dispatch-hq.html
+# These headers are required for:
+#   - Whisper on-device speech recognition (COOP + COEP)
+#   - Content Security Policy (XSS protection)
+
+/dispatch-hq.html
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+  Cross-Origin-Resource-Policy: cross-origin
+  Content-Security-Policy: default-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://maps.googleapis.com https://maps.gstatic.com https://script.google.com; connect-src 'self' https://script.google.com https://cdn.jsdelivr.net https://huggingface.co https://*.huggingface.co wss:; worker-src blob:; img-src 'self' data: https://maps.gstatic.com https://maps.googleapis.com;
+
+# For index.html (if you rename dispatch-hq.html to index.html)
+/index.html
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+  Cross-Origin-Resource-Policy: cross-origin
+  Content-Security-Policy: default-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://maps.googleapis.com https://maps.gstatic.com https://script.google.com; connect-src 'self' https://script.google.com https://cdn.jsdelivr.net https://huggingface.co https://*.huggingface.co wss:; worker-src blob:; img-src 'self' data: https://maps.gstatic.com https://maps.googleapis.com;
+
+# Apply to everything (catch-all for any hosting path)
+/*
+  X-Frame-Options: SAMEORIGIN
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: microphone=(self), camera=(), geolocation=()

@@ -1,0 +1,9 @@
+[build]
+  command = "npm ci && python3 build.py"
+  publish = "."
+
+# Serve dispatch-hq.html at the root URL (keeps URL clean)
+[[redirects]]
+  from = "/"
+  to = "/dispatch-hq.html"
+  status = 200

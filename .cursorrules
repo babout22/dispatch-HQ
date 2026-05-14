@@ -1,0 +1,500 @@
+# Dispatch HQ — Cursor Rules
+# This file is read automatically by Cursor on every interaction.
+# Do NOT delete or modify this file's format.
+
+## PROJECT IDENTITY
+You are editing Dispatch HQ — a bilingual (English/Korean) taxi dispatch booking web app for NYC.
+Single-page application. React 18. Pre-compiled with esbuild. Google Sheets encrypted backend.
+
+## FILE ROLES — CRITICAL
+
+### EDIT THESE:
+- `taxi-dispatcher.jsx`     — THE source file. All feature changes go here.
+- `google-apps-script.js`   — Backend. Paste into Google Apps Script editor after changes.
+
+### NEVER EDIT DIRECTLY:
+- `dispatch-hq.html`        — GENERATED from taxi-dispatcher.jsx via esbuild. Regenerate, never hand-edit.
+
+### Supporting docs (update when features change):
+- `codex-handoff.md`, `chatgpt-handoff.md`, `website-deploy-guide.md`
+
+---
+
+## BUILD COMMAND (run after every JSX change)
+
+```bash
+python3 -c "
+jsx = open('taxi-dispatcher.jsx').read()
+jsx = jsx.replace(
+    'import { useState, useEffect, useCallback, useRef, useMemo } from \"react\";',
+    'const { useState, useEffect, useCallback, useRef, useMemo } = React;'
+)
+jsx = jsx.replace('export default function TaxiDispatcherApp()', 'function TaxiDispatcherApp()')
+jsx += '\nReactDOM.createRoot(document.getElementById(\"root\")).render(React.createElement(TaxiDispatcherApp));\n'
+open('app-for-compile.jsx', 'w').write(jsx)
+"
+esbuild app-for-compile.jsx --jsx=transform --outfile=app-compiled.js --target=es2018
+# Then inject app-compiled.js into dispatch-hq.html between the React guard markers
+```
+
+esbuild flags — NEVER change these:
+- `--target=es2018`  — removes ?. optional chaining (Chrome 66+ / Firefox 57+ / Safari 12+)
+- `--jsx=transform`  — classic React.createElement (NOT automatic runtime)
+- NO `--bundle`      — React is a CDN global, not bundled
+
+---
+
+## REACT ENVIRONMENT CONSTRAINTS
+
+React is loaded from CDN at runtime — it is a GLOBAL, not an import.
+```javascript
+// TOP OF FILE (line 1) — keep exactly:
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+// This import is STRIPPED by the build script and replaced with:
+const { useState, useEffect, useCallback, useRef, useMemo } = React;
+```
+
+- NEVER add `import React from 'react'` — it will break the build
+- NEVER use JSX automatic runtime (`jsx: 'react-jsx'`)
+- NEVER use `ReactDOM.render()` — use `ReactDOM.createRoot().render()`
+- Always use `React.createElement(ComponentName)` at mount point (not JSX)
+
+---
+
+## AUTHENTICATION ARCHITECTURE
+
+Two-layer auth system:
+
+### Layer 1 — Local (localStorage/sessionStorage) — Lines 1–510
+```
+AUTH_ACCOUNTS_KEY = "dispatch-hq-accounts"  → localStorage → array of UserAccount
+AUTH_SESSION_KEY  = "dispatch-hq-session"   → sessionStorage → single SessionObject
+```
+Used for offline/demo mode. Admin account created on first run by `ensureAdminExists()` (L60).
+
+### Layer 2 — Server (GAS) — Lines 1714+
+```
+DispatcherApp state: authStatus, currentUser (with .token from GAS)
+saveSession(userData), clearSession()
+```
+GAS sessions: 24h TTL, 64-char hex token stored in Sessions sheet.
+
+Password hashing:
+- Client (Layer 2): `SHA-256(password + "dispatch-hq-client-salt")` via Web Crypto
+- GAS server: re-hashes with PBKDF2 10,000 rounds before storage
+- Local (Layer 1): `SHA-256(salt + password + "dispatch-hq-2024")` via Web Crypto
+
+Admin credentials:
+- username: `admin` (hardcoded, unreservable)
+- password hash: set `ADMIN_PASSWORD_HASH` in GAS after running `hashPassword("pass")` in console
+
+---
+
+## STORAGE KEYS — COMPLETE MAP
+
+```javascript
+// localStorage
+"dispatch-hq-accounts"     → UserAccount[]          (local auth)
+"dispatch-hq-sync-config"  → SyncConfig             (GAS endpoint, passphrase hash, lastSync, authToken)
+"dispatch-hq-maps-key"     → string                 (Google Maps API key)
+"dispatch-hq-gdpr-notice"  → "dismissed"            (GDPR banner state)
+"taxi-bookings-data"        → Booking[]              (all bookings, 2yr retention)
+"dispatch-hq-backup-{ts}"  → Booking[]              (snapshots, rolling 5)
+"dispatch-hq-backup-log"   → BackupLogEntry[]       (100 entries)
+
+// sessionStorage
+"dispatch-hq-session"      → SessionObject          (current auth session)
+```
+
+---
+
+## CORE DATA SHAPES
+
+### Booking (complete, 18 fields)
+```typescript
+{
+  id: string              // 24-char hex, crypto.getRandomValues
+  customerName: string
+  phone: string           // sanitizePhone() → [0-9+\-().space] only
+  pickupAddress: string
+  dropoffAddress: string
+  airline: string         // "" when !isAirportTrip
+  flightNumber: string    // "" when !isAirportTrip; always UPPERCASE
+  passengers: string      // "1" default
+  luggage: string         // "0" default
+  tripType: "one-way" | "round-trip"
+  paymentAmount: string   // sanitizeNumeric()
+  driverNumber: string    // 2-char padded: "08", "19"
+  date: string            // "YYYY-MM-DD"
+  timeSlot: string        // "3:00 PM" (12h with space before AM/PM)
+  createdAt: string       // ISO 8601
+  modifiedAt: string      // ISO 8601 — newer wins on sync conflict
+  flightStatus: string    // "On Time" | "Delayed" | ""
+  flightArrival: string   // ISO or time string
+  fareRoute: string       // "JFK → Manhattan"
+  fareBreakdown: string   // "$70 +$8 toll"
+}
+```
+
+### INIT_FORM (exact, L1218)
+```javascript
+const INIT_FORM = {
+  customerName: "", pickupAddress: "", dropoffAddress: "",
+  airline: "", flightNumber: "",
+  passengers: "1", luggage: "0", tripType: "one-way",
+  phone: "", paymentAmount: "", driverNumber: "",
+  date: new Date().toISOString().split("T")[0],
+  timeSlot: "", customTime: ""
+};
+```
+
+### Driver (L1132)
+```typescript
+{
+  id: string              // "08" — 2-char string, NOT number
+  airportPickup: boolean  // can pick up FROM airport
+  airportDropoff: boolean // can drop off AT airport
+  shiftStart: string      // "05:00" (24h)
+  shiftEnd: string        // "16:00" (24h)
+  daysOff: string[]       // ["Thursday"] — weekday names
+  monthlyOff: number[]    // [9,19,29] — day-of-month
+  specialShifts: Array<{day: string, start: string, end: string}>
+  notes: string
+}
+```
+
+### UserAccount (local auth)
+```typescript
+{
+  id: string
+  username: string
+  passwordHash: string    // SHA-256(salt + pw + "dispatch-hq-2024")
+  salt: string
+  displayName: string
+  role: "dispatcher" | "admin"
+  status: "pending" | "active" | "disabled" | "rejected"
+  createdAt: string
+}
+```
+
+---
+
+## KEY FUNCTIONS — LINE REFERENCE
+
+| Function | Line | Purpose |
+|----------|------|---------|
+| `sanitize(str, maxLen)` | 510 | Strip `<>&"'/\`, trim, slice |
+| `sanitizePhone(str)` | 514 | Keep `[0-9+\-().space]` |
+| `sanitizeNumeric(str)` | 518 | Keep digits + single decimal |
+| `sanitizeInteger(str, min, max)` | 525 | Clamp to int range |
+| `sanitizeDriverId(str)` | 533 | Digits only, max 3 chars |
+| `sanitizeErrorMsg(err)` | 537 | Strip URLs/paths/tokens≥32chars |
+| `normalizeLocation(text)` | 808 | Airport alias → "JFK"/"LGA"/"EWR" |
+| `lookupFlatRate(pu, do, trip, pax)` | 851 | Fare calculator, 47+ routes |
+| `executeFlight(input)` | 966 | Anthropic API flight lookup |
+| `executeFare(input)` | 939 | Local fare calculation |
+| `runAIAssist(...)` | 1019 | Parallel flight+fare via AI |
+| `getDriverShift(driver, dateStr)` | 1158 | Returns shift availability |
+| `isTimeInShift(slot12h, s, e)` | 1206 | 12h slot within 24h shift |
+| `formatShiftDisplay(s, e)` | 1194 | "05:00,16:00" → "5AM–4PM" |
+| `isValidBooking(b)` | 1224 | hasOwnProperty check (not `in`) |
+| `loadBookings()` | 1232 | localStorage → Booking[] |
+| `saveBookings(arr)` | 1262 | Booking[] → localStorage |
+| `parseTranscriptLocal` | 2189 | Quick Fill regex parser |
+| `parseTranscriptAI` | 2403 | Anthropic API smart parse |
+| `isAirportTrip` | 2467 | useMemo: pickup or dropoff at airport |
+| `normalizeSpokenNumbers(text)` | 4204 | EN+KO spoken numbers → digits |
+| `WhisperService` | 4274 | On-device Whisper singleton |
+| `LoginPage()` | 3907 | Sign in / Sign up UI |
+| `AdminDashboard()` | 4056 | Admin user management UI |
+| `AddressField()` | 4354 | Address input + Maps + Whisper |
+
+---
+
+## ISAIRPORTTRIP — CRITICAL DERIVED STATE (L2467)
+
+```javascript
+const isAirportTrip = useMemo(() => {
+  const CODES = ["JFK", "LGA", "EWR"];
+  return CODES.includes(normalizeLocation(form.pickupAddress)) ||
+         CODES.includes(normalizeLocation(form.dropoffAddress));
+}, [form.pickupAddress, form.dropoffAddress]);
+```
+
+**Drives:**
+- Airline/Flight # `required` flag in validation (L~2510)
+- Airline/Flight # `disabled` + `opacity:0.25` in UI (L~2610)
+- Auto-clear airline/flightNumber on address change (in onChange handlers)
+- Fleet Assignment grey-out: `noAirportPU`, `noAirportDO` conditions
+
+**DO NOT** call `normalizeLocation()` inline in render — use this useMemo.
+
+---
+
+## FLEET ASSIGNMENT GREYING LOGIC
+
+All four conditions evaluated per driver per render:
+```javascript
+const offDate     = !shift.available                    // date check via getDriverShift
+const offTime     = !offDate && form.timeSlot           // time check via driverTimeMatch useMemo
+                     ? !driverTimeMatch[driver.id].available : false
+const noAirportPU = needsPickup  && !driver.airportPickup
+const noAirportDO = needsDropoff && !driver.airportDropoff
+
+const isUnavailable = offDate || offTime || noAirportPU || noAirportDO
+
+// Reason label priority:
+offDate → "Off today"
+noAirportPU && noAirportDO → "No airport"
+noAirportPU → `No PU at ${pickup}`
+noAirportDO → `No DO at ${dropoff}`
+offTime → "Off shift"
+shift.start → `${fmt12(shift.start)}–${fmt12(shift.end)}`
+default → "On duty"
+```
+
+Shift time display — always 12h (never military time):
+```javascript
+const fmt12 = (t) => {
+  let [h, m] = t.split(":").map(Number);
+  const p = h >= 12 ? "PM" : "AM";
+  if (h === 0) h = 12; else if (h > 12) h -= 12;
+  return `${h}${m ? ":"+String(m).padStart(2,"0") : ""}${p}`;
+};
+```
+
+---
+
+## GETDRIVERSHIFT — TIMEZONE BUG (FIXED, DO NOT REVERT)
+
+```javascript
+// CORRECT — use T12:00:00 to avoid UTC midnight timezone offset
+const d = new Date(dateStr + "T12:00:00");
+const weekday = d.toLocaleDateString("en-US", { weekday: "long" });
+
+// WRONG — never use this form:
+const d = new Date(dateStr);  // UTC midnight → wrong local weekday in some timezones
+```
+
+---
+
+## SYNCSERVICE — ALWAYS USE THESE PATTERNS
+
+```javascript
+// ALL fetches via _fetchWithTimeout (never raw fetch):
+SyncService._fetchWithTimeout(url, options, timeoutMs)
+// Timeouts: ping=15000, POST=30000, pull=60000
+
+// ALL POST bodies use text/plain (avoids CORS preflight on GAS):
+headers: { "Content-Type": "text/plain;charset=utf-8" }
+
+// ALWAYS check resp.ok after fetch
+// ALWAYS check for empty responses
+// ALWAYS use _parseResponse() for JSON extraction (handles GAS quirks)
+```
+
+---
+
+## WHISPER VOICE INPUT (AddressField)
+
+```javascript
+// Model: "Xenova/whisper-tiny" via @xenova/transformers@2.17.2
+// CDN: https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2
+// Storage: IndexedDB (permanent cache after first ~40MB download)
+
+// Config:
+{
+  language: null,          // AUTO-DETECT — never force "korean" or "english"
+  task: "transcribe",
+  initial_prompt: "주소를 말하고 있습니다. The speaker is saying a street address..."
+}
+
+// Toggle: one tap = start recording (MediaRecorder), one tap = stop + transcribe
+// States: "idle" → "recording" → "processing" → "done"|"error"
+// HIPAA: runs 100% in-browser, no network calls during inference
+
+// Pipeline:
+// MediaRecorder → Blob → ArrayBuffer → AudioContext.decodeAudioData
+// → resample to 16kHz → Float32Array → asr() → normalizeSpokenNumbers()
+
+// MediaRecorder MIME priority:
+["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/ogg", "audio/mp4", ""]
+// Use first supported via MediaRecorder.isTypeSupported()
+```
+
+---
+
+## PARSÉTRANSCRIPTLOCAL — FIELD EXTRACTION ORDER (DO NOT REORDER)
+
+Fields must be extracted in this order to prevent regex bleed:
+```
+1. Date    (month names, M/D/YYYY, YYYY-MM-DD, tomorrow, today, 오늘, 내일)
+2. Time    (3 PM, 3:30 PM, 오후 3시 → form.timeSlot = "3:00 PM")
+3. Payment ($70, 70 dollars, 70달러)
+4. Flight  (KE81, flight KE 81, IATA pattern [A-Z]{2}\d{2,5})
+5. Airline (known carrier list)
+6. Driver  (driver 19, 기사 08)
+7. Name    (keyword prefix OR first capitalized words before any keyword)
+8. Phone   (10-11 digit pattern)
+9. TripType (round-trip|one-way|왕복|편도)
+10. Passengers, Luggage
+11. CLEANED TEXT → Pickup, Dropoff (after removing matched tokens from string)
+12. Airport normalization on pickup/dropoff
+```
+
+---
+
+## GAS API — COMPLETE CONTRACT
+
+**Transport:** All POST use `Content-Type: text/plain;charset=utf-8`, body = `JSON.stringify(payload)`
+**CORS:** text/plain = simple request = no preflight = GAS receives POST directly
+
+```
+GET  ?action=ping&token=AUTH_TOKEN
+     → { success, message, sheetName, recordCount }
+
+GET  ?action=list&token=AUTH_TOKEN[&since=ISO]
+     → { success, records: [{id, encryptedData, iv, salt, timestamp, deleted}], count }
+
+GET  ?action=validateSession&sessionToken=TOKEN
+     → { success, valid: bool }
+
+GET  ?action=adminGetUsers&sessionToken=TOKEN   (admin role required)
+     → { success, users: User[], activeSessions, totalBookings }
+
+POST { action:"register", username, passwordHash, displayName, email }
+     → { success, status:"pending", message }
+
+POST { action:"login", username, passwordHash }
+     → { success, token, expiresAt, role, displayName }
+     error 401: wrong credentials
+     error 403: pending/disabled account
+
+POST { action:"logout", sessionToken }
+     → { success }
+
+POST { action:"approveUser"|"rejectUser"|"disableUser"|"enableUser"|"deleteUser",
+       targetUsername, sessionToken }    (admin session required)
+     → { success, message }
+
+POST { action:"batchSync", records: EncRecord[], clientId, token }
+     max 500 records, AUTH_TOKEN required
+     → { success, created, updated, totalRecords }
+
+POST { action:"delete", id, clientId, token }
+     → { success, deleted: id }          soft-delete only
+
+POST { action:"purge", confirmPurge:true, token }
+     1-hour cooldown enforced via CacheService
+     → { success, purged: count }        hard-deletes soft-deleted rows
+```
+
+---
+
+## GAS SHEETS SCHEMA
+
+```
+Sheet: EncryptedBookings
+  id | encryptedData (≤50KB) | iv (base64) | salt (base64) | timestamp (ISO) | deleted ("true"/"false")
+
+Sheet: Users
+  id | username | passwordHash | displayName | role | status | createdAt | approvedAt | approvedBy | email
+
+Sheet: Sessions
+  token | userId | username | role | createdAt | expiresAt | ip
+
+Sheet: SyncMeta
+  key | value | updatedAt
+
+Sheet: SyncLog
+  timestamp | action | clientId | recordCount | details
+```
+
+---
+
+## SECURITY — INVARIANTS CURSOR MUST NEVER BREAK
+
+```javascript
+// 1. Always sanitize on submit:
+sanitize(form.customerName)
+sanitizePhone(form.phone)
+sanitizeNumeric(form.paymentAmount)
+sanitizeDriverId(form.driverNumber)
+
+// 2. Sync URL domain check — must stay:
+if (!url.startsWith("https://script.google.com/")) { reject }
+
+// 3. isValidBooking uses hasOwnProperty (not `in` operator):
+Object.prototype.hasOwnProperty.call(b, "__proto__") // block prototype pollution
+
+// 4. BANNED: eval(), dangerouslySetInnerHTML, alert(), confirm(), document.write
+
+// 5. Error messages must be sanitized before display:
+sanitizeErrorMsg(err) // strips URLs, file paths, tokens ≥32 chars
+
+// 6. GAS rate limit key MUST be "rate_global" (not client-supplied value)
+
+// 7. All GAS LockService.waitLock() inside try/catch, releaseLock() in finally
+
+// 8. Passphrase: min 8, max 128 chars. Never store plaintext.
+
+// 9. No raw_info or stack traces in user-facing error messages
+```
+
+---
+
+## RESPONSIVE CSS — CLASSES USED IN JSX
+
+These classes must exist in the `<style>{\`...\`}</style>` block (inside JSX, L~1520):
+
+```css
+.resp-grid-2  { grid-template-columns: 1fr 1fr }   /* collapses at 480px */
+.resp-grid-3  { grid-template-columns: 1fr 1fr 1fr } /* 2-col at 480px, 1-col at 360px */
+.resp-grid-4  { grid-template-columns: repeat(4,1fr) } /* 3-col at 480px, 2-col at 360px */
+.card-enter   { animation: slideUp 0.25s ease-out forwards }
+.rec-pulse    { animation: glow 1.2s ease-in-out infinite }
+.booking-card-grid span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+```
+
+---
+
+## COMMON MISTAKES TO AVOID
+
+1. **`new Date("YYYY-MM-DD")`** — always append `"T12:00:00"` for driver shift timezone safety
+2. **Driver IDs are strings** — `"08"` not `8`. Use `.padStart(2,"0")` when constructing.
+3. **timeSlot format is "3:00 PM"** (12h, space before AM/PM). `customTime` is "HH:MM" (24h for `<input type="time">`).
+4. **Form updates use spread** — `setForm(prev => ({...prev, field: value}))` — never mutate directly
+5. **isAirportTrip is a useMemo** — don't call `normalizeLocation()` inline during render
+6. **Whisper language must be `null`** — never force "korean" or "english" (breaks bilingual speakers)
+7. **normalizeSpokenNumbers() runs AFTER Whisper** — apply to `result.text` before setting field value
+8. **esbuild Korean unicode** — `주소` compiles to `\uC8FC\uC18C`. Do not "fix" this — it's correct.
+9. **SessionStorage for auth** — session clears on tab close by design (security). Not localStorage.
+10. **Date comparison for retention** — ISO date string comparison `b.date >= cutoffStr` is valid and intentional.
+
+---
+
+## DATA RETENTION
+
+```javascript
+// Runs on every app load (L1497 inside DispatcherApp init):
+const [bookings, setBookings] = useState(() =>
+  BackupService.autoPurgeOldBookings(loadBookings(), 730)); // 730 = 2 years exactly
+
+// Logic: filter out bookings where b.date < (today - 730 days) as "YYYY-MM-DD" string
+```
+
+---
+
+## FEATURE FLAGS / MODES
+
+```javascript
+isStandaloneMode()     // true = running as standalone HTML (not Claude.ai iframe)
+                       // → flight lookup + AI Smart Fill disabled (CORS blocks browser→Anthropic)
+                       // → Whisper mic works (HTTPS required)
+
+micPermission          // "unknown"|"granted"|"denied"|"sandbox"
+                       // "sandbox" = not on HTTPS, or in SpeechRecognition-blocked env
+
+mapsReady              // true when Google Maps Places API loaded and available
+                       // Set by ensureMapsLoaded(apiKey, cb) after key is saved
+```

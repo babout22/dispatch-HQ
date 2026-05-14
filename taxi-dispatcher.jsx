@@ -1,0 +1,4889 @@
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+
+// ════════════════════════════════════════════════════════════════
+// AUTH SYSTEM — accounts, sessions, admin
+// ════════════════════════════════════════════════════════════════
+
+const AUTH_ACCOUNTS_KEY  = "dispatch-hq-accounts";
+const AUTH_SESSION_KEY   = "dispatch-hq-session";
+const ADMIN_EMAIL        = "admin";          // login username for admin
+
+// Hash password with SHA-256
+async function hashPassword(password, salt) {
+  const enc = new TextEncoder();
+  const data = enc.encode(salt + password + "dispatch-hq-2024");
+  const buf  = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
+}
+
+function generateId() {
+  const arr = new Uint8Array(12);
+  crypto.getRandomValues(arr);
+  return Array.from(arr).map(b => b.toString(16).padStart(2,"0")).join("");
+}
+
+
+
+// ── Admin account — created on first run ──
+
+// ════════════════════════════════════════════════════════════════
+// SANITIZERS & UTILITIES
+// ════════════════════════════════════════════════════════════════
+
+
+function sanitize(str, maxLen = 200) {
+  if (typeof str !== "string") return "";
+  return str.replace(/[<>&"'/\\]/g, "").trim().slice(0, maxLen);
+}
+function sanitizePhone(str) {
+  if (typeof str !== "string") return "";
+  return str.replace(/[^0-9+\-(). ]/g, "").slice(0, 30);
+}
+function sanitizeNumeric(str) {
+  if (typeof str !== "string") return "";
+  const cleaned = str.replace(/[^0-9.]/g, "").slice(0, 15);
+  const parts = cleaned.split(".");
+  if (parts.length <= 2) return cleaned;
+  return parts[0] + "." + parts.slice(1).join("");
+}
+function sanitizeInteger(str, min, max) {
+  if (typeof str !== "string") return String(min || 0);
+  const n = parseInt(str.replace(/[^0-9]/g, ""), 10);
+  if (isNaN(n)) return String(min || 0);
+  if (min != null && n < min) return String(min);
+  if (max != null && n > max) return String(max);
+  return String(n);
+}
+function sanitizeDriverId(str) {
+  if (typeof str !== "string") return "";
+  return str.replace(/[^0-9]/g, "").slice(0, 3);
+}
+function sanitizeErrorMsg(err) {
+  const msg = (err && err.message) ? err.message : String(err || "Unknown error");
+  // Strip anything that looks like a URL, path, or API key
+  return msg.replace(/https?:\/\/[^\s]+/g, "[url]")
+            .replace(/\/[^\s]*\//g, "[path]")
+            .replace(/[A-Za-z0-9]{32,}/g, "[redacted]")
+            .slice(0, 200);
+}
+// Detect if running standalone (website) vs inside Claude.ai artifact (iframe)
+// Anthropic API calls only work in the artifact — browser CORS blocks them on standalone sites
+function isStandaloneMode() {
+  try { return window.self === window.top; } catch { return false; }
+}
+
+function generateSecureId() {
+  const arr = new Uint8Array(12);
+  crypto.getRandomValues(arr);
+  return Array.from(arr, b => b.toString(36).padStart(2, "0")).join("").slice(0, 16);
+}
+
+// ── Encryption Service (AES-256-GCM via Web Crypto API) ──
+const CryptoService = {
+  async deriveKey(passphrase, salt) {
+    const enc = new TextEncoder();
+    const keyMaterial = await crypto.subtle.importKey(
+      "raw", enc.encode(passphrase), "PBKDF2", false, ["deriveKey"]
+    );
+    return crypto.subtle.deriveKey(
+      { name: "PBKDF2", salt, iterations: 310000, hash: "SHA-256" },
+      keyMaterial,
+      { name: "AES-GCM", length: 256 },
+      false,
+      ["encrypt", "decrypt"]
+    );
+  },
+
+  async encrypt(data, passphrase) {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await this.deriveKey(passphrase, salt);
+    const enc = new TextEncoder();
+    const ciphertext = await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv }, key, enc.encode(JSON.stringify(data))
+    );
+    return {
+      encryptedData: this._bufToBase64(ciphertext),
+      iv: this._bufToBase64(iv),
+      salt: this._bufToBase64(salt)
+    };
+  },
+
+  async decrypt(encryptedData, iv, salt, passphrase) {
+    const saltBuf = this._base64ToBuf(salt);
+    const ivBuf = this._base64ToBuf(iv);
+    const dataBuf = this._base64ToBuf(encryptedData);
+    const key = await this.deriveKey(passphrase, saltBuf);
+    const decrypted = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: ivBuf }, key, dataBuf
+    );
+    return JSON.parse(new TextDecoder().decode(decrypted));
+  },
+
+  async hashPassphrase(passphrase) {
+    const enc = new TextEncoder();
+    const hash = await crypto.subtle.digest("SHA-256", enc.encode("dispatch-hq-v1:" + passphrase));
+    return this._bufToBase64(hash);
+  },
+
+  _bufToBase64(buf) {
+    const bytes = new Uint8Array(buf);
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+  },
+
+  _base64ToBuf(b64) {
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes.buffer;
+  }
+};
+
+// ── Remote Sync Service ──
+// Google Apps Script Web Apps respond with 302 redirects. fetch() follows 302 but 
+// changes POST→GET per HTTP spec, losing the body. Fix: use "text/plain" Content-Type 
+// to avoid CORS preflight, which lets GAS handle the POST directly.
+const SyncService = {
+  // Safe JSON extraction: finds first balanced {...} in text
+  _extractJson(text) {
+    const start = text.indexOf("{");
+    if (start < 0) return null;
+    let depth = 0;
+    for (let i = start; i < text.length; i++) {
+      const ch = text[i];
+      if (ch === "{") depth++;
+      else if (ch === "}") { depth--; if (depth === 0) return text.slice(start, i + 1); }
+    }
+    return null;
+  },
+
+  _parseResponse(text) {
+    try { return JSON.parse(text); }
+    catch {
+      const json = this._extractJson(text);
+      if (json) return JSON.parse(json);
+      return null;
+    }
+  },
+
+  // Fetch with timeout (default 30 seconds)
+  async _fetchWithTimeout(url, options, timeoutMs) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs || 30000);
+    try {
+      const resp = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(timeout);
+      return resp;
+    } catch (err) {
+      clearTimeout(timeout);
+      if (err.name === "AbortError") throw new Error("Request timed out after " + ((timeoutMs || 30000) / 1000) + "s — check your internet connection");
+      throw err;
+    }
+  },
+
+  async _gasPost(url, body) {
+    const resp = await this._fetchWithTimeout(url, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(body),
+      redirect: "follow"
+    }, 30000);
+    if (!resp.ok && resp.status !== 0) {
+      // GAS returns 200 even for errors (wrapped in JSON), but network/proxy errors give real HTTP codes
+      throw new Error("Server returned HTTP " + resp.status);
+    }
+    const text = await resp.text();
+    if (!text || text.length < 2) throw new Error("Empty response from server");
+    const result = this._parseResponse(text);
+    if (!result) throw new Error("Server returned invalid response (not JSON)");
+    return result;
+  },
+
+  async ping(url, token) {
+    const resp = await this._fetchWithTimeout(
+      url + "?action=ping&clientId=dispatch-hq&token=" + encodeURIComponent(token || ""),
+      { method: "GET", redirect: "follow" },
+      15000  // 15s timeout for ping
+    );
+    const text = await resp.text();
+    if (!text || text.length < 2) throw new Error("Empty response — check that the URL is a valid Apps Script deployment");
+    const result = this._parseResponse(text);
+    if (!result) throw new Error("Server returned invalid response — verify the Apps Script is deployed as a Web App");
+    return result;
+  },
+
+  async fetchAll(url, since, token) {
+    let fetchUrl = url + "?action=list&clientId=dispatch-hq&token=" + encodeURIComponent(token || "");
+    if (since) fetchUrl += "&since=" + encodeURIComponent(since);
+    const resp = await this._fetchWithTimeout(fetchUrl, { method: "GET", redirect: "follow" }, 60000);  // 60s for large pulls
+    const text = await resp.text();
+    if (!text || text.length < 2) throw new Error("Empty response from server");
+    const result = this._parseResponse(text);
+    if (!result) throw new Error("Server returned invalid data");
+    return result;
+  },
+
+  async batchSync(url, records, token) {
+    return this._gasPost(url, { action: "batchSync", records, clientId: "dispatch-hq", token });
+  },
+
+  async deleteRecord(url, id, token) {
+    return this._gasPost(url, { action: "delete", id, clientId: "dispatch-hq", token });
+  }
+};
+
+// ── Sync Config Storage (non-sensitive — stored in localStorage) ──
+const SYNC_CONFIG_KEY = "dispatch-hq-sync-config";
+function loadSyncConfig() {
+  try {
+    const raw = localStorage.getItem(SYNC_CONFIG_KEY);
+    if (!raw) return { endpointUrl: "", passphraseHash: "", lastSync: "", authToken: "" };
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return { endpointUrl: "", passphraseHash: "", lastSync: "" };
+    return {
+      endpointUrl: typeof parsed.endpointUrl === "string" ? parsed.endpointUrl : "",
+      passphraseHash: typeof parsed.passphraseHash === "string" ? parsed.passphraseHash : "",
+      lastSync: typeof parsed.lastSync === "string" ? parsed.lastSync : "",
+      authToken: typeof parsed.authToken === "string" ? parsed.authToken : ""
+    };
+  } catch { return { endpointUrl: "", passphraseHash: "", lastSync: "", authToken: "" }; }
+}
+function saveSyncConfig(config) {
+  try { localStorage.setItem(SYNC_CONFIG_KEY, JSON.stringify(config)); } catch {}
+}
+
+const MAPS_KEY_STORAGE = "dispatch-hq-maps-key";
+function loadMapsKey() { try { return localStorage.getItem(MAPS_KEY_STORAGE) || ""; } catch { return ""; } }
+function saveMapsKey(k) { try { if (k) localStorage.setItem(MAPS_KEY_STORAGE, k); else localStorage.removeItem(MAPS_KEY_STORAGE); } catch {} }
+
+// Dynamically load Google Maps Places library once
+let mapsLoadState = "idle"; // idle | loading | ready | error
+let mapsReadyCbs = [];
+function ensureMapsLoaded(apiKey, cb) {
+  if (mapsLoadState === "ready") { cb(true); return; }
+  if (mapsLoadState === "error") { cb(false); return; }
+  mapsReadyCbs.push(cb);
+  if (mapsLoadState === "loading") return;
+  mapsLoadState = "loading";
+  const s = document.createElement("script");
+  s.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`;
+  s.async = true;
+  s.onload = () => { mapsLoadState = "ready"; mapsReadyCbs.forEach(f => f(true)); mapsReadyCbs = []; };
+  s.onerror = () => { mapsLoadState = "error"; mapsReadyCbs.forEach(f => f(false)); mapsReadyCbs = []; };
+  document.head.appendChild(s);
+}
+const FLAT_RATES = [
+  // Airport ↔ Manhattan
+  { from: "JFK", to: "Manhattan", zone: "Midtown", rate: 70, toll: 0 },
+  { from: "JFK", to: "Manhattan", zone: "Downtown", rate: 65, toll: 0 },
+  { from: "JFK", to: "Manhattan", zone: "Uptown", rate: 75, toll: 0 },
+  { from: "LGA", to: "Manhattan", zone: "Midtown", rate: 40, toll: 0 },
+  { from: "LGA", to: "Manhattan", zone: "Downtown", rate: 50, toll: 0 },
+  { from: "LGA", to: "Manhattan", zone: "Uptown", rate: 35, toll: 0 },
+  { from: "EWR", to: "Manhattan", zone: "Midtown", rate: 80, toll: 15 },
+  { from: "EWR", to: "Manhattan", zone: "Downtown", rate: 75, toll: 15 },
+  { from: "EWR", to: "Manhattan", zone: "Uptown", rate: 85, toll: 15 },
+  // Airport ↔ Boroughs
+  { from: "JFK", to: "Brooklyn", zone: null, rate: 50, toll: 0 },
+  { from: "JFK", to: "Queens", zone: null, rate: 35, toll: 0 },
+  { from: "JFK", to: "Bronx", zone: null, rate: 80, toll: 0 },
+  { from: "JFK", to: "Staten Island", zone: null, rate: 85, toll: 19 },
+  { from: "LGA", to: "Brooklyn", zone: null, rate: 45, toll: 0 },
+  { from: "LGA", to: "Queens", zone: null, rate: 25, toll: 0 },
+  { from: "LGA", to: "Bronx", zone: null, rate: 35, toll: 0 },
+  { from: "EWR", to: "Brooklyn", zone: null, rate: 85, toll: 15 },
+  { from: "EWR", to: "Queens", zone: null, rate: 80, toll: 15 },
+  { from: "EWR", to: "Bronx", zone: null, rate: 90, toll: 15 },
+  // Airport ↔ NJ/CT/Suburbs
+  { from: "JFK", to: "New Jersey", zone: "North NJ", rate: 100, toll: 15 },
+  { from: "JFK", to: "New Jersey", zone: "Central NJ", rate: 120, toll: 15 },
+  { from: "JFK", to: "Connecticut", zone: "Stamford", rate: 140, toll: 0 },
+  { from: "JFK", to: "Connecticut", zone: "Hartford", rate: 250, toll: 0 },
+  { from: "JFK", to: "Long Island", zone: "Nassau", rate: 60, toll: 0 },
+  { from: "JFK", to: "Long Island", zone: "Suffolk", rate: 90, toll: 0 },
+  { from: "JFK", to: "Westchester", zone: null, rate: 95, toll: 0 },
+  { from: "LGA", to: "New Jersey", zone: "North NJ", rate: 80, toll: 15 },
+  { from: "LGA", to: "Connecticut", zone: "Stamford", rate: 110, toll: 0 },
+  { from: "LGA", to: "Long Island", zone: "Nassau", rate: 55, toll: 0 },
+  { from: "LGA", to: "Westchester", zone: null, rate: 65, toll: 0 },
+  { from: "EWR", to: "New Jersey", zone: "North NJ", rate: 55, toll: 0 },
+  { from: "EWR", to: "New Jersey", zone: "Central NJ", rate: 75, toll: 0 },
+  { from: "EWR", to: "Connecticut", zone: "Stamford", rate: 150, toll: 15 },
+  { from: "EWR", to: "Long Island", zone: "Nassau", rate: 100, toll: 15 },
+  // Airport ↔ Airport
+  { from: "JFK", to: "LGA", zone: null, rate: 45, toll: 0 },
+  { from: "JFK", to: "EWR", zone: null, rate: 90, toll: 15 },
+  { from: "LGA", to: "EWR", zone: null, rate: 80, toll: 15 },
+  // Koreatown / Flushing specific
+  { from: "JFK", to: "Flushing", zone: null, rate: 40, toll: 0 },
+  { from: "LGA", to: "Flushing", zone: null, rate: 20, toll: 0 },
+  { from: "EWR", to: "Flushing", zone: null, rate: 90, toll: 15 },
+  { from: "JFK", to: "Fort Lee", zone: null, rate: 95, toll: 15 },
+  { from: "LGA", to: "Fort Lee", zone: null, rate: 60, toll: 15 },
+  { from: "EWR", to: "Fort Lee", zone: null, rate: 50, toll: 0 },
+  { from: "JFK", to: "Palisades Park", zone: null, rate: 95, toll: 15 },
+  { from: "LGA", to: "Palisades Park", zone: null, rate: 60, toll: 15 },
+  { from: "EWR", to: "Palisades Park", zone: null, rate: 55, toll: 0 },
+];
+
+// Normalize location text for matching
+function normalizeLocation(text) {
+  if (!text) return "";
+  const t = text.toLowerCase().trim();
+  // Airport codes
+  if (/\bjfk\b|john f\.?\s*kennedy|kennedy airport/.test(t)) return "JFK";
+  if (/\blga\b|laguardia|la\s*guardia/.test(t)) return "LGA";
+  if (/\bewr\b|newark\s*(liberty)?\s*airport|newark\s*ewr/.test(t)) return "EWR";
+  // NYC Boroughs
+  if (/\bmanhattan\b|\bmidtown\b|\bdowntown\b|\buptown\b|\bupper\s*(east|west)\b|\blower\s*(east|manhattan)\b|\btimes\s*sq/.test(t)) return "Manhattan";
+  if (/\bbrooklyn\b|\bbushwick\b|\bwilliamsburg\b|\bpark\s*slope\b|\bbay\s*ridge\b|\bsunset\s*park\b|\bflatbush\b/.test(t)) return "Brooklyn";
+  if (/\bqueens\b|\bjamaica\b|\bastoria\b|\blong\s*island\s*city\b|\blic\b|\belmhurst\b|\bjackson\s*heights\b|\bbayside\b/.test(t)) return "Queens";
+  if (/\bbronx\b|\briverdale\b/.test(t)) return "Bronx";
+  if (/\bstaten\s*island\b/.test(t)) return "Staten Island";
+  if (/\bflushing\b/.test(t)) return "Flushing";
+  // NJ
+  if (/\bfort\s*lee\b/.test(t)) return "Fort Lee";
+  if (/\bpalisades?\s*park\b|\bpalisade\b/.test(t)) return "Palisades Park";
+  if (/\bnew\s*jersey\b|\bnj\b|\bjersey\s*city\b|\bhoboken\b|\bnewark\b(?!.*airport)/.test(t)) return "New Jersey";
+  // CT
+  if (/\bconnecticut\b|\bct\b|\bstamford\b|\bgreenwich\b|\bnorwalk\b|\bdanbury\b/.test(t)) return "Connecticut";
+  if (/\bhartford\b|\bnew\s*haven\b|\bbridgeport\b/.test(t)) return "Connecticut";
+  // LI / Westchester
+  if (/\blong\s*island\b|\bnassau\b|\bgarden\s*city\b|\bhempstead\b|\bmineola\b/.test(t)) return "Long Island";
+  if (/\bsuffolk\b|\bhuntington\b|\bbabylon\b|\bislip\b/.test(t)) return "Long Island";
+  if (/\bwestchester\b|\bwhite\s*plains\b|\byonkers\b|\bnew\s*rochelle\b|\btarrytown\b/.test(t)) return "Westchester";
+  return t;
+}
+
+function getSubZone(text) {
+  if (!text) return null;
+  const t = text.toLowerCase();
+  if (/midtown|times\s*sq|herald|penn\s*sta|34th|42nd|50th/.test(t)) return "Midtown";
+  if (/downtown|financial|wall\s*st|tribeca|soho|lower\s*manhattan|battery/.test(t)) return "Downtown";
+  if (/uptown|harlem|upper\s*(east|west)|morningside|washington\s*heights|inwood/.test(t)) return "Uptown";
+  if (/north\s*(?:nj|jersey)|bergen|hackensack|teaneck|englewood|fort\s*lee|palisade/.test(t)) return "North NJ";
+  if (/central\s*(?:nj|jersey)|edison|new\s*brunswick|woodbridge|princeton/.test(t)) return "Central NJ";
+  if (/stamford|greenwich|norwalk|darien|westport/.test(t)) return "Stamford";
+  if (/hartford|new\s*haven|bridgeport|waterbury|danbury/.test(t)) return "Hartford";
+  if (/nassau|garden\s*city|hempstead|mineola|great\s*neck/.test(t)) return "Nassau";
+  if (/suffolk|huntington|babylon|islip|smithtown/.test(t)) return "Suffolk";
+  return null;
+}
+
+function lookupFlatRate(pickup, dropoff) {
+  const from = normalizeLocation(pickup);
+  const to = normalizeLocation(dropoff);
+  if (!from || !to) return { found: false, message: "Could not identify locations" };
+
+  // Direct search
+  const zoneFrom = getSubZone(pickup);
+  const zoneTo = getSubZone(dropoff);
+
+  let match = FLAT_RATES.find(r =>
+    r.from === from && r.to === to && (r.zone === null || r.zone === zoneTo)
+  );
+  // Try reverse direction
+  if (!match) {
+    match = FLAT_RATES.find(r =>
+      r.from === to && r.to === from && (r.zone === null || r.zone === zoneFrom)
+    );
+  }
+  // Broad match without zone
+  if (!match) {
+    match = FLAT_RATES.find(r =>
+      (r.from === from && r.to === to) || (r.from === to && r.to === from)
+    );
+  }
+
+  if (match) {
+    const total = match.rate + (match.toll || 0);
+    return {
+      found: true,
+      baseFare: match.rate,
+      toll: match.toll,
+      total,
+      from: match.from,
+      to: match.to,
+      zone: match.zone,
+      message: `${match.from} → ${match.to}${match.zone ? ` (${match.zone})` : ""}: $${match.rate}${match.toll > 0 ? ` + $${match.toll} toll` : ""} = $${total}`
+    };
+  }
+
+  return {
+    found: false,
+    from, to,
+    message: `No preset rate for ${from} → ${to}. Enter a custom amount.`
+  };
+}
+
+// ── AI Assist Service — Anthropic API with Parallel Tool Calling ──
+const TOOL_DEFINITIONS = [
+  {
+    name: "lookup_flight_status",
+    description: "Look up current flight status, arrival/departure times, delays, gate, and terminal info. Use for any flight-related query. Can search by flight number (e.g. KE81, UA123, OZ222) or by airline + city.",
+    input_schema: {
+      type: "object",
+      properties: {
+        flight_number: { type: "string", description: "IATA flight number, e.g. 'KE81', 'UA123', 'DL456'" },
+        airline: { type: "string", description: "Airline name if flight number not provided, e.g. 'Korean Air', 'United'" },
+        city: { type: "string", description: "Origin or destination city to filter flights, e.g. 'Seoul', 'Los Angeles'" },
+        date: { type: "string", description: "Flight date in YYYY-MM-DD format" }
+      },
+      required: []
+    }
+  },
+  {
+    name: "calculate_fare",
+    description: "Calculate the flat-rate taxi fare between a pickup location and dropoff location in the NYC/NJ/CT metro area. Handles airports (JFK, LGA, EWR), Manhattan zones, boroughs, NJ, CT, Long Island, Westchester, Flushing, Fort Lee, Palisades Park. Returns fare breakdown with tolls.",
+    input_schema: {
+      type: "object",
+      properties: {
+        pickup_location: { type: "string", description: "Pickup address or area name" },
+        dropoff_location: { type: "string", description: "Dropoff address or area name" },
+        trip_type: { type: "string", enum: ["one-way", "round-trip"], description: "Trip type for fare calculation" },
+        num_passengers: { type: "integer", description: "Number of passengers (surcharge may apply for 5+)" }
+      },
+      required: ["pickup_location", "dropoff_location"]
+    }
+  }
+];
+
+async function executeToolCall(toolName, toolInput) {
+  if (toolName === "lookup_flight_status") {
+    return executeFlight(toolInput);
+  }
+  if (toolName === "calculate_fare") {
+    return executeFare(toolInput);
+  }
+  return { error: "Unknown tool" };
+}
+
+function executeFare(input) {
+  const result = lookupFlatRate(input.pickup_location, input.dropoff_location);
+  if (result.found) {
+    let total = result.total;
+    let surcharges = [];
+    if (input.trip_type === "round-trip") {
+      total = result.baseFare * 2 + result.toll * 2;
+      surcharges.push("Round-trip: x2");
+    }
+    if (input.num_passengers && input.num_passengers >= 5) {
+      const extra = Math.ceil((input.num_passengers - 4) * 10);
+      total += extra;
+      surcharges.push(`Large group (+$${extra})`);
+    }
+    return {
+      found: true,
+      route: `${result.from} → ${result.to}${result.zone ? ` (${result.zone})` : ""}`,
+      base_fare: result.baseFare,
+      toll: result.toll,
+      surcharges: surcharges,
+      total: total,
+      currency: "USD"
+    };
+  }
+  return { found: false, message: result.message, pickup: result.from, dropoff: result.to };
+}
+
+async function executeFlight(input) {
+  if (isStandaloneMode()) {
+    return { error: "Flight lookup requires the Claude.ai app. On this website, enter flight details manually.", status: "unavailable" };
+  }
+  const fn = (input.flight_number || "").toUpperCase().replace(/\s+/g, "");
+  const query = fn
+    ? `${fn} flight status today ${input.date || ""}`
+    : `${input.airline || ""} flights ${input.city || ""} status today ${input.date || ""}`;
+  try {
+    const resp = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 1000,
+        system: `You are a flight status assistant. Search for the flight and return ONLY a JSON object (no markdown, no backticks, no explanation before or after). Fields:
+flight_number (string, IATA like "KE81"), airline (string), origin_city (string), origin_code (3-letter IATA), destination_city (string), destination_code (3-letter IATA), scheduled_departure (time string), scheduled_arrival (time string), actual_departure (time or null), actual_arrival (time or null), status (one of: "on-time","delayed","cancelled","landed","in-air","scheduled","unknown"), delay_minutes (integer or 0), terminal (string or null), gate (string or null), aircraft_type (string or null).
+If you cannot find the specific flight, still return the JSON with status "unknown" and fill what you can from the search.`,
+        messages: [{ role: "user", content: `Find current status for: ${query}` }],
+        tools: [{ type: "web_search_20250305", name: "web_search" }]
+      })
+    });
+    if (!resp.ok) return { error: `API HTTP ${resp.status}`, status: "error" };
+    const data = await resp.json();
+    // Check for API-level errors
+    if (data.type === "error") return { error: data.error?.message || "API error", status: "error" };
+    if (!data.content || !Array.isArray(data.content)) return { error: "Empty API response", status: "error" };
+    // Extract text blocks (web_search results are processed server-side)
+    const textParts = data.content.filter(b => b.type === "text").map(b => b.text);
+    const fullText = textParts.join("\n").trim();
+    if (!fullText) return { error: "No flight data returned from search", status: "error" };
+    try {
+      const cleaned = fullText.replace(/```json|```/g, "").trim();
+      // Find the JSON object in the response (sometimes there's preamble text)
+      // Extract first balanced JSON object
+      const jStart = cleaned.indexOf("{");
+      let jEnd = -1;
+      if (jStart >= 0) { let depth = 0; for (let i = jStart; i < cleaned.length; i++) { if (cleaned[i] === "{") depth++; else if (cleaned[i] === "}") { depth--; if (depth === 0) { jEnd = i; break; } } } }
+      if (jEnd <= jStart) return { error: "Could not parse flight data", status: "error" };
+      const parsed = JSON.parse(cleaned.slice(jStart, jEnd + 1));
+      // Normalize: ensure delay_minutes is a number
+      if (parsed.delay_minutes != null) parsed.delay_minutes = Number(parsed.delay_minutes) || 0;
+      // Ensure flight_number is uppercased
+      if (parsed.flight_number) parsed.flight_number = parsed.flight_number.toUpperCase().replace(/\s+/g, "");
+      return parsed;
+    } catch {
+      return { error: "Flight data format error", status: "error" };
+    }
+  } catch (err) {
+    return { error: "Flight lookup failed: " + err.message, status: "error" };
+  }
+}
+
+async function runAIAssist(flightNumber, airline, city, date, pickup, dropoff, tripType, passengers) {
+  if (isStandaloneMode()) {
+    return { flight: null, fare: null, error: "AI features require the Claude.ai app. Use Quick Fill or enter details manually." };
+  }
+  const hasFlightQuery = !!(flightNumber || (airline && city));
+  const hasFareQuery = !!(pickup && dropoff);
+  if (!hasFlightQuery && !hasFareQuery) return { flight: null, fare: null };
+
+  // Build a prompt that will cause parallel tool calls
+  let userPrompt = "Please help me with the following tasks IN PARALLEL (call both tools simultaneously if both are needed):\n\n";
+  if (hasFlightQuery) {
+    const safeFlightNum = (flightNumber || "").replace(/[^A-Z0-9]/gi, "").slice(0, 10);
+    const safeAirline = (airline || "").replace(/[^a-zA-Z0-9 ]/g, "").slice(0, 30);
+    userPrompt += `TASK 1 — FLIGHT STATUS: Look up flight status for ${safeFlightNum ? `flight ${safeFlightNum}` : `${safeAirline} flights`}${date ? ` on ${date}` : " today"}.\n\n`;
+  }
+  if (hasFareQuery) {
+    const safePickup = (pickup || "").replace(/[^a-zA-Z0-9 ,.'#-]/g, "").slice(0, 100);
+    const safeDropoff = (dropoff || "").replace(/[^a-zA-Z0-9 ,.'#-]/g, "").slice(0, 100);
+    userPrompt += `TASK 2 — FARE CALCULATION: Calculate the taxi fare from "${safePickup}" to "${safeDropoff}", trip type: ${tripType || "one-way"}, ${passengers || 1} passenger(s).\n\n`;
+  }
+  userPrompt += "Use the appropriate tools now. Call them in PARALLEL — do not wait for one before calling the other.";
+
+  try {
+    const resp = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 1000,
+        system: "You are a dispatcher assistant. When given flight lookup and fare calculation tasks, ALWAYS call both tools in parallel (in the same response). Never call just one if both are requested. Use the tools provided — do not answer from memory.",
+        messages: [{ role: "user", content: userPrompt }],
+        tools: TOOL_DEFINITIONS
+      })
+    });
+    if (!resp.ok) return { flight: null, fare: null, error: `API HTTP ${resp.status}` };
+    const data = await resp.json();
+    if (data.type === "error") return { flight: null, fare: null, error: data.error?.message || "API error" };
+    if (!data.content || !Array.isArray(data.content)) return { flight: null, fare: null, error: "Empty API response" };
+
+    const toolCalls = data.content.filter(b => b.type === "tool_use");
+
+    if (toolCalls.length === 0) {
+      const text = data.content.filter(b => b.type === "text").map(b => b.text).join("\n");
+      return { flight: null, fare: null, text };
+    }
+
+    // Execute all tool calls in parallel
+    const toolResults = await Promise.all(
+      toolCalls.map(async (tc) => {
+        try {
+          return { id: tc.id, name: tc.name, result: await executeToolCall(tc.name, tc.input) };
+        } catch (err) {
+          return { id: tc.id, name: tc.name, result: { error: err.message } };
+        }
+      })
+    );
+
+    // Build tool_result messages for the follow-up
+    const toolResultMessages = toolResults.map(tr => ({
+      type: "tool_result",
+      tool_use_id: tr.id,
+      content: JSON.stringify(tr.result)
+    }));
+
+    // Send results back for Claude to synthesize
+    try {
+      const followUp = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1000,
+          system: "Respond ONLY with a JSON object (no markdown backticks). Fields: flight (object with flight_number, airline, status, scheduled_arrival, actual_arrival, delay_minutes, terminal, gate, origin_code, destination_code, origin_city, destination_city — or null if no flight lookup), fare (object with route, base_fare, toll, surcharges, total, found — or null if no fare lookup), summary (short 1-line dispatcher summary).",
+          messages: [
+            { role: "user", content: userPrompt },
+            { role: "assistant", content: data.content },
+            { role: "user", content: toolResultMessages }
+          ],
+          tools: TOOL_DEFINITIONS
+        })
+      });
+      if (followUp.ok) {
+        const followUpData = await followUp.json();
+        if (followUpData.content && Array.isArray(followUpData.content)) {
+          const finalText = followUpData.content.filter(b => b.type === "text").map(b => b.text).join("\n");
+          if (finalText) {
+            try {
+              const jsonMatch = finalText.replace(/```json|```/g, "").trim().match(/\{[\s\S]*\}/);
+              if (jsonMatch) {
+                const parsed = JSON.parse(jsonMatch[0]);
+                if (parsed.flight && parsed.flight.delay_minutes != null) parsed.flight.delay_minutes = Number(parsed.flight.delay_minutes) || 0;
+                return parsed;
+              }
+            } catch {}
+          }
+        }
+      }
+    } catch {}
+
+    // Fallback: return raw tool results directly
+    const flightResult = toolResults.find(r => r.name === "lookup_flight_status");
+    const fareResult = toolResults.find(r => r.name === "calculate_fare");
+    return {
+      flight: flightResult?.result?.error ? null : (flightResult?.result || null),
+      fare: fareResult?.result?.error ? null : (fareResult?.result || null),
+      summary: "Results retrieved (direct)"
+    };
+  } catch (err) {
+    return { flight: null, fare: null, error: "AI Assist failed: " + err.message };
+  }
+}
+
+// ── Driver Database ──
+const DRIVERS = [
+  { id: "08", airportPickup: true, airportDropoff: false, shiftStart: "05:00", shiftEnd: "16:00", daysOff: ["Thursday"], specialShifts: [{ day: "Thursday", start: "05:00", end: "09:00" }], notes: "Thu 5am–9am only" },
+  { id: "10", airportPickup: true, airportDropoff: true, shiftStart: "10:00", shiftEnd: "22:00", daysOff: [], monthlyOff: [9, 19, 29], notes: "Off every 9th, 19th, 29th" },
+  { id: "11", airportPickup: true, airportDropoff: true, shiftStart: "07:00", shiftEnd: "19:00", daysOff: [], notes: "" },
+  { id: "17", airportPickup: true, airportDropoff: true, shiftStart: "06:00", shiftEnd: "22:00", daysOff: ["Wednesday", "Saturday"], notes: "" },
+  { id: "19", airportPickup: true, airportDropoff: true, shiftStart: "04:00", shiftEnd: "00:00", daysOff: [], notes: "" },
+  { id: "20", airportPickup: true, airportDropoff: true, shiftStart: "05:00", shiftEnd: "00:00", daysOff: [], notes: "" },
+  { id: "30", airportPickup: true, airportDropoff: true, shiftStart: "05:00", shiftEnd: "00:00", daysOff: ["Monday", "Friday"], notes: "" },
+  { id: "33", airportPickup: true, airportDropoff: true, shiftStart: "05:00", shiftEnd: "17:00", daysOff: [], notes: "" },
+  { id: "35", airportPickup: true, airportDropoff: false, shiftStart: "10:00", shiftEnd: "00:00", daysOff: ["Tuesday"], notes: "" },
+  { id: "37", airportPickup: true, airportDropoff: true, shiftStart: "10:00", shiftEnd: "19:00", daysOff: ["Monday", "Tuesday"], notes: "" },
+  { id: "45", airportPickup: false, airportDropoff: false, shiftStart: "07:00", shiftEnd: "19:00", daysOff: ["Thursday"], notes: "No airport service" },
+  { id: "50", airportPickup: true, airportDropoff: true, shiftStart: "17:00", shiftEnd: "04:00", daysOff: ["Sunday"], notes: "Night shift (5pm–4am)" },
+  { id: "55", airportPickup: true, airportDropoff: true, shiftStart: "05:00", shiftEnd: "15:00", daysOff: [], notes: "⚠️ No rain/snow days" },
+  { id: "57", airportPickup: true, airportDropoff: true, shiftStart: "08:00", shiftEnd: "18:00", daysOff: ["Wednesday", "Saturday"], notes: "" },
+  { id: "60", airportPickup: false, airportDropoff: false, shiftStart: "07:00", shiftEnd: "22:00", daysOff: ["Wednesday"], notes: "No airport service" },
+  { id: "77", airportPickup: true, airportDropoff: true, shiftStart: "04:00", shiftEnd: "00:00", daysOff: [], notes: "" },
+  { id: "87", airportPickup: true, airportDropoff: true, shiftStart: "04:00", shiftEnd: "18:00", daysOff: ["Sunday"], specialShifts: [{ day: "Wednesday", start: "04:00", end: "12:00" }, { day: "Saturday", start: "04:00", end: "12:00" }], notes: "Wed/Sat: 4am–12pm" },
+  { id: "88", airportPickup: true, airportDropoff: false, shiftStart: "07:00", shiftEnd: "00:00", daysOff: ["Sunday"], notes: "Dropoff Korean-speaking only" },
+  { id: "95", airportPickup: true, airportDropoff: true, shiftStart: "10:00", shiftEnd: "20:00", daysOff: [], notes: "CT-based, limited NYC" },
+];
+
+const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const AM_SLOTS = ["4:00 AM","4:30 AM","5:00 AM","5:30 AM","6:00 AM","6:30 AM","7:00 AM","7:30 AM","8:00 AM","8:30 AM","9:00 AM","9:30 AM","10:00 AM","10:30 AM","11:00 AM","11:30 AM"];
+const PM_SLOTS = ["12:00 PM","12:30 PM","1:00 PM","1:30 PM","2:00 PM","2:30 PM","3:00 PM","3:30 PM","4:00 PM","4:30 PM","5:00 PM","5:30 PM","6:00 PM","6:30 PM","7:00 PM","7:30 PM","8:00 PM","8:30 PM","9:00 PM","9:30 PM","10:00 PM","10:30 PM","11:00 PM","11:30 PM"];
+
+function getDriverShift(driver, date) {
+  // Parse "YYYY-MM-DD" as local time, not UTC (append T12:00:00 to avoid timezone shift)
+  const d = new Date(date + "T12:00:00");
+  const dayName = DAYS[d.getDay()];
+  const dayOfMonth = d.getDate();
+  if (driver.daysOff.includes(dayName)) {
+    if (driver.specialShifts) {
+      const sp = driver.specialShifts.find(s => s.day === dayName);
+      if (sp) return { available: true, start: sp.start, end: sp.end, limited: true };
+    }
+    return { available: false };
+  }
+  if (driver.monthlyOff && driver.monthlyOff.includes(dayOfMonth)) return { available: false };
+  if (driver.specialShifts) {
+    const sp = driver.specialShifts.find(s => s.day === dayName);
+    if (sp) return { available: true, start: sp.start, end: sp.end, limited: true };
+  }
+  return { available: true, start: driver.shiftStart, end: driver.shiftEnd, limited: false };
+}
+
+function getShiftLabel(driver) {
+  const s = parseInt(driver.shiftStart);
+  const e = parseInt(driver.shiftEnd);
+  if (s >= 17) return "Night";
+  if (e <= 17) return "Morning";
+  return "All-Day";
+}
+
+function formatTime24(t) {
+  const [time, period] = t.split(" ");
+  let [h, m] = time.split(":").map(Number);
+  if (period === "PM" && h !== 12) h += 12;
+  if (period === "AM" && h === 12) h = 0;
+  return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
+}
+
+function formatShiftDisplay(start, end) {
+  const fmt = (t) => {
+    let [h, m] = t.split(":").map(Number);
+    const p = h >= 12 ? "PM" : "AM";
+    if (h === 0) h = 12;
+    else if (h > 12) h -= 12;
+    return `${h}:${String(m).padStart(2,"0")}${p}`;
+  };
+  return `${fmt(start)} – ${fmt(end)}`;
+}
+
+// Check if a 12h time slot falls within a 24h shift window
+function isTimeInShift(slot12h, shiftStart, shiftEnd) {
+  const t24 = formatTime24(slot12h);
+  const slotMins = parseInt(t24.split(":")[0]) * 60 + parseInt(t24.split(":")[1]);
+  const startMins = parseInt(shiftStart.split(":")[0]) * 60 + parseInt(shiftStart.split(":")[1]);
+  let endMins = parseInt(shiftEnd.split(":")[0]) * 60 + parseInt(shiftEnd.split(":")[1]);
+  if (endMins === 0) endMins = 24 * 60;
+  if (endMins <= startMins) {
+    return slotMins >= startMins || slotMins < endMins;
+  }
+  return slotMins >= startMins && slotMins < endMins;
+}
+
+const INIT_FORM = { customerName: "", pickupAddress: "", dropoffAddress: "", airline: "", flightNumber: "", passengers: "1", luggage: "0", tripType: "one-way", phone: "", paymentAmount: "", driverNumber: "", date: new Date().toISOString().split("T")[0], timeSlot: "", customTime: "" };
+
+// ── Storage helpers (hardened) ──
+const STORAGE_KEY     = "taxi-bookings-data";      // plaintext (legacy / migration)
+const ENC_STORAGE_KEY = "taxi-bookings-enc";       // encrypted (production)
+const ENC_SALT_KEY    = "taxi-bookings-salt";      // PBKDF2 salt (non-secret)
+
+// Load and decrypt bookings using passphrase
+async function loadBookingsEncrypted(passphrase) {
+  try {
+    const encRaw = localStorage.getItem(ENC_STORAGE_KEY);
+    if (encRaw) {
+      // Encrypted storage exists — decrypt it
+      const { encryptedData, iv, salt } = JSON.parse(encRaw);
+      const decrypted = await CryptoService.decrypt(encryptedData, iv, salt, passphrase);
+      const arr = JSON.parse(decrypted);
+      if (!Array.isArray(arr)) throw new Error("Not an array");
+      return arr.filter(isValidBooking);
+    }
+    // No encrypted storage — check for legacy plaintext
+    const plain = localStorage.getItem(STORAGE_KEY);
+    if (plain) {
+      const arr = JSON.parse(plain);
+      if (Array.isArray(arr) && arr.length > 0) {
+        // Migrate: encrypt existing bookings with this passphrase
+        await saveBookingsEncrypted(arr.filter(isValidBooking), passphrase);
+        localStorage.removeItem(STORAGE_KEY);
+        return arr.filter(isValidBooking);
+      }
+    }
+    return [];
+  } catch (err) {
+    if (err && (err.message || "").toLowerCase().includes("decrypt") ||
+        err instanceof DOMException) {
+      throw new Error("WRONG_PASSPHRASE");
+    }
+    return [];
+  }
+}
+
+// Encrypt and save bookings using passphrase
+async function saveBookingsEncrypted(bookings, passphrase) {
+  try {
+    const capped = bookings.slice(-5000);
+    const encrypted = await CryptoService.encrypt(capped, passphrase);
+    localStorage.setItem(ENC_STORAGE_KEY, JSON.stringify(encrypted));
+  } catch (err) {
+    console.error("Failed to save encrypted bookings:", err);
+  }
+}
+const REQUIRED_BOOKING_FIELDS = ["id","customerName","date","timeSlot"];
+
+function isValidBooking(b) {
+  if (b === null || typeof b !== "object" || Array.isArray(b)) return false;
+  // Block prototype pollution keys
+  // Check for prototype pollution: only flag if key is OWN property (not inherited)
+  if (b.hasOwnProperty("__proto__") || b.hasOwnProperty("constructor") || b.hasOwnProperty("prototype")) return false;
+  return REQUIRED_BOOKING_FIELDS.every(f => typeof b[f] === "string" && b[f].length > 0);
+}
+
+function loadBookings() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    // Validate each booking, drop corrupt entries
+    return parsed.filter(isValidBooking).map(b => ({
+      id: sanitize(b.id, 20),
+      customerName: sanitize(b.customerName),
+      pickupAddress: sanitize(b.pickupAddress),
+      dropoffAddress: sanitize(b.dropoffAddress),
+      airline: sanitize(b.airline, 50),
+      flightNumber: sanitize(b.flightNumber, 20),
+      passengers: sanitizeNumeric(b.passengers || "1"),
+      luggage: sanitizeNumeric(b.luggage || "0"),
+      tripType: ["one-way","round-trip"].includes(b.tripType) ? b.tripType : "one-way",
+      phone: sanitizePhone(b.phone),
+      paymentAmount: sanitizeNumeric(b.paymentAmount),
+      driverNumber: sanitizeDriverId(b.driverNumber),
+      date: sanitize(b.date, 10),
+      timeSlot: sanitize(b.timeSlot, 12),
+      createdAt: sanitize(b.createdAt || "", 30),
+      flightStatus: sanitize(b.flightStatus || "", 20),
+      flightArrival: sanitize(b.flightArrival || "", 30),
+      fareRoute: sanitize(b.fareRoute || "", 100),
+      fareBreakdown: sanitize(b.fareBreakdown || "", 60)
+    }));
+  } catch { return []; }
+}
+function saveBookings(bookings) {
+  try {
+    const capped = bookings.slice(-5000);
+    const data = JSON.stringify(capped);
+    if (data.length > 4 * 1024 * 1024) {
+      console.warn("Booking data too large, trimming oldest entries");
+      saveBookings(capped.slice(Math.floor(capped.length / 2)));
+      return;
+    }
+    localStorage.setItem(STORAGE_KEY, data);
+    // Auto-backup after every save
+    BackupService.autoSnapshot(capped);
+  } catch (e) {
+    console.error("Failed to save bookings:", e);
+  }
+}
+
+// ── Backup Service — Rolling snapshots + log + export/import ──
+const BACKUP_PREFIX = "dispatch-hq-backup-";
+const BACKUP_LOG_KEY = "dispatch-hq-backup-log";
+const MAX_SNAPSHOTS = 5; // Keep last 5 auto-snapshots
+
+const BackupService = {
+  // Auto-snapshot: called on every save, throttled to 1 per 10 minutes
+  _lastSnapshot: 0,
+  autoSnapshot(bookings) {
+    const now = Date.now();
+    if (now - this._lastSnapshot < 10 * 60 * 1000) return; // Throttle: max 1 every 10 min
+    if (!bookings || bookings.length === 0) return;
+    this._lastSnapshot = now;
+    try {
+      const key = BACKUP_PREFIX + new Date().toISOString().replace(/[:.]/g, "-");
+      const snapshot = { bookings, timestamp: new Date().toISOString(), count: bookings.length, type: "auto" };
+      localStorage.setItem(key, JSON.stringify(snapshot));
+      this.addLog("auto", bookings.length, "Auto-backup saved");
+      this.pruneOldSnapshots();
+    } catch (e) {
+      console.warn("Auto-backup failed:", e.message);
+    }
+  },
+
+  // Manual snapshot: dispatcher clicks "Back Up Now"
+  manualSnapshot(bookings) {
+    if (!bookings || bookings.length === 0) return { success: false, message: "No bookings to back up" };
+    try {
+      const key = BACKUP_PREFIX + "manual-" + new Date().toISOString().replace(/[:.]/g, "-");
+      const snapshot = { bookings, timestamp: new Date().toISOString(), count: bookings.length, type: "manual" };
+      localStorage.setItem(key, JSON.stringify(snapshot));
+      this.addLog("manual", bookings.length, "Manual backup by dispatcher");
+      this.pruneOldSnapshots();
+      return { success: true, message: `Backed up ${bookings.length} bookings` };
+    } catch (e) {
+      return { success: false, message: "Backup failed: " + e.message };
+    }
+  },
+
+  // List all available snapshots
+  listSnapshots() {
+    const snapshots = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(BACKUP_PREFIX)) {
+        try {
+          const raw = localStorage.getItem(key);
+          const snap = JSON.parse(raw);
+          snapshots.push({
+            key,
+            timestamp: snap.timestamp || "Unknown",
+            count: snap.count || (snap.bookings ? snap.bookings.length : 0),
+            type: snap.type || "auto",
+            sizeKB: Math.round((raw.length) / 1024)
+          });
+        } catch {}
+      }
+    }
+    return snapshots.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  },
+
+  // Restore from a snapshot
+  restoreSnapshot(key) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return { success: false, message: "Snapshot not found" };
+      const snap = JSON.parse(raw);
+      if (!snap.bookings || !Array.isArray(snap.bookings)) return { success: false, message: "Snapshot is corrupt" };
+      // Validate each booking before restoring
+      const valid = snap.bookings.filter(isValidBooking);
+      if (valid.length === 0) return { success: false, message: "Snapshot contains no valid bookings" };
+      this.addLog("restore", valid.length, `Restored from ${snap.type} backup (${snap.timestamp})`);
+      return { success: true, bookings: valid, message: `Restored ${valid.length} bookings from ${snap.timestamp}` };
+    } catch (e) {
+      return { success: false, message: "Restore failed: " + e.message };
+    }
+  },
+
+  // Delete a snapshot
+  deleteSnapshot(key) {
+    try {
+      localStorage.removeItem(key);
+      this.addLog("delete", 0, `Deleted backup: ${key}`);
+      return { success: true };
+    } catch { return { success: false }; }
+  },
+
+  // Prune: keep only MAX_SNAPSHOTS most recent
+  pruneOldSnapshots() {
+    const snapshots = this.listSnapshots();
+    if (snapshots.length > MAX_SNAPSHOTS) {
+      // Keep manual snapshots longer — only auto-prune auto backups
+      const autoSnaps = snapshots.filter(s => s.type === "auto");
+      const toPrune = autoSnaps.slice(MAX_SNAPSHOTS);
+      toPrune.forEach(s => {
+        try { localStorage.removeItem(s.key); } catch {}
+      });
+    }
+  },
+
+  // Export to downloadable JSON file
+  exportToFile(bookings) {
+    if (!bookings || bookings.length === 0) return { success: false, message: "No bookings to export" };
+    try {
+      const exportData = {
+        app: "Dispatch HQ",
+        version: "1.0",
+        exportedAt: new Date().toISOString(),
+        bookingCount: bookings.length,
+        bookings: bookings
+      };
+      const json = JSON.stringify(exportData, null, 2);
+      const blob = new Blob([json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `dispatch-hq-backup-${new Date().toISOString().split("T")[0]}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      this.addLog("export", bookings.length, "Exported to JSON file");
+      return { success: true, message: `Exported ${bookings.length} bookings to file` };
+    } catch (e) {
+      return { success: false, message: "Export failed: " + e.message };
+    }
+  },
+
+  // Import from JSON file
+  importFromFile(fileContent) {
+    try {
+      const data = JSON.parse(fileContent);
+      let bookingsToImport = [];
+      // Support both direct array and wrapped format
+      if (Array.isArray(data)) {
+        bookingsToImport = data;
+      } else if (data.bookings && Array.isArray(data.bookings)) {
+        bookingsToImport = data.bookings;
+      } else {
+        return { success: false, message: "Invalid file format — expected JSON array or {bookings: [...]}" };
+      }
+      const valid = bookingsToImport.filter(isValidBooking);
+      if (valid.length === 0) return { success: false, message: "File contains no valid bookings" };
+      this.addLog("import", valid.length, `Imported from file (${valid.length} of ${bookingsToImport.length} valid)`);
+      return { success: true, bookings: valid, message: `Imported ${valid.length} bookings (${bookingsToImport.length - valid.length} skipped as invalid)` };
+    } catch (e) {
+      return { success: false, message: "Import failed: " + e.message };
+    }
+  },
+
+  // ── Backup Log ──
+  addLog(action, count, message) {
+    try {
+      const log = this.getLog();
+      log.unshift({
+        timestamp: new Date().toISOString(),
+        action,
+        count,
+        message
+      });
+      // Keep last 100 log entries
+      const trimmed = log.slice(0, 100);
+      localStorage.setItem(BACKUP_LOG_KEY, JSON.stringify(trimmed));
+    } catch {}
+  },
+
+  getLog() {
+    try {
+      const raw = localStorage.getItem(BACKUP_LOG_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch { return []; }
+  },
+
+  clearLog() {
+    try { localStorage.removeItem(BACKUP_LOG_KEY); } catch {}
+  },
+
+  // Auto-purge bookings older than N days (called on app load)
+  autoPurgeOldBookings(bookings, maxAgeDays) {
+    if (!maxAgeDays || maxAgeDays <= 0) return bookings;
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - maxAgeDays);
+    const cutoffStr = cutoff.toISOString().split("T")[0];
+    const kept = bookings.filter(b => b.date >= cutoffStr);
+    const purged = bookings.length - kept.length;
+    if (purged > 0) {
+      this.addLog("auto-purge", purged, "Purged " + purged + " bookings older than " + maxAgeDays + " days (2-year retention policy)");
+    }
+    return kept;
+  },
+
+  // Storage usage summary
+  getStorageInfo() {
+    let totalBytes = 0;
+    let bookingBytes = 0;
+    let backupBytes = 0;
+    let backupCount = 0;
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+      const size = (localStorage.getItem(key) || "").length * 2; // UTF-16
+      totalBytes += size;
+      if (key === STORAGE_KEY) bookingBytes = size;
+      if (key.startsWith(BACKUP_PREFIX)) { backupBytes += size; backupCount++; }
+    }
+    return {
+      totalKB: Math.round(totalBytes / 1024),
+      bookingKB: Math.round(bookingBytes / 1024),
+      backupKB: Math.round(backupBytes / 1024),
+      backupCount,
+      capacityPercent: Math.round((totalBytes / (5 * 1024 * 1024)) * 100)
+    };
+  }
+};
+
+// ── Main App ──
+function DispatcherApp({ session, onLogout }) {
+  const [view, setView] = useState("booking");
+  const [gdprDismissed, setGdprDismissed] = useState(() => {
+    try { return localStorage.getItem("dispatch-hq-gdpr-notice") === "dismissed"; } catch { return false; }
+  });
+  const dismissGdpr = () => {
+    setGdprDismissed(true);
+    try { localStorage.setItem("dispatch-hq-gdpr-notice", "dismissed"); } catch {}
+  };
+  const [bookings, setBookings] = useState(() => BackupService.autoPurgeOldBookings(loadBookings(), 730));
+  const [form, setForm] = useState({...INIT_FORM});
+  const [showConfirm, setShowConfirm] = useState(null);
+  const [isListening, setIsListening] = useState(false);
+  const [speechLang, setSpeechLang] = useState("en-US");
+  const [transcript, setTranscript] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const handleSearchChange = (v) => setSearchQuery(v.slice(0, 100));
+  const [filters, setFilters] = useState({ dateFrom: "", dateTo: "", driverNumber: "", tripType: "", shift: "", dayType: "" });
+  const [editingBooking, setEditingBooking] = useState(null);
+  const [showDriverPanel, setShowDriverPanel] = useState(false);
+  const [timeMode, setTimeMode] = useState("grid");
+  const recognitionRef = useRef(null);
+
+  // ── AI Assist State (Flight + Pricing) ──
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiTimer, setAiTimer] = useState(0);
+  const aiTimerRef = useRef(null);
+  const [flightData, setFlightData] = useState(null);
+  const [fareData, setFareData] = useState(null);
+  const [aiError, setAiError] = useState("");
+  const [aiSummary, setAiSummary] = useState("");
+  const [manualFare, setManualFare] = useState(null);
+
+  // ── Voice / UI Error States ──
+  const [voiceError, setVoiceError] = useState("");
+  const [micPermission, setMicPermission] = useState("unknown"); // unknown | granted | denied | sandbox
+  const micPermissionRef = useRef("unknown");
+  const [showMicPrompt, setShowMicPrompt] = useState(false);
+  const [showTypeInput, setShowTypeInput] = useState(false);
+  const [fieldMicActive, setFieldMicActive] = useState(null); // null | "pickupAddress" | "dropoffAddress"
+  const fieldMicRef = useRef(null); // Kept for compatibility but never triggered
+  const [showCal, setShowCal] = useState(false);
+  const [dashPage, setDashPage] = useState(50); // how many bookings to show
+  const [showTimePicker, setShowTimePicker] = useState(false);
+  const [calViewMonth, setCalViewMonth] = useState(() => { const n = new Date(); return { year: n.getFullYear(), month: n.getMonth() }; });
+  const [mapsApiKey, setMapsApiKey] = useState(() => loadMapsKey());
+  const [mapsReady, setMapsReady] = useState(false);
+
+  // Auto-load Maps if key already stored
+  useEffect(() => {
+    const key = loadMapsKey();
+    if (key) ensureMapsLoaded(key, ok => setMapsReady(ok));
+  }, []);
+  const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+  const [formError, setFormError] = useState("");
+  const [missingFields, setMissingFields] = useState([]); // field names that failed validation
+  // Clear field highlight when user starts filling it
+  useEffect(() => {
+    if (missingFields.length === 0) return;
+    const stillMissing = missingFields.filter(f => {
+      if (f === "customerName") return !form.customerName.trim();
+      if (f === "phone") return !form.phone.trim();
+      if (f === "pickupAddress") return !form.pickupAddress.trim();
+      if (f === "dropoffAddress") return !form.dropoffAddress.trim();
+      if (f === "date") return !form.date;
+      if (f === "timeSlot") return !form.timeSlot && !form.customTime;
+      if (f === "driverNumber") return !form.driverNumber;
+      if (f === "airline") return isAirportTrip && !form.airline.trim();
+      if (f === "flightNumber") return isAirportTrip && !form.flightNumber.trim();
+      if (f === "paymentAmount") return !form.paymentAmount.trim();
+      return false;
+    });
+    if (stillMissing.length !== missingFields.length) setMissingFields(stillMissing);
+  }, [form, missingFields]);
+  const [syncResetConfirm, setSyncResetConfirm] = useState(false);
+  const micAvailable = micPermission !== "sandbox" && micPermission !== "denied";
+
+  // ── Backup State ──
+  const [backupMsg, setBackupMsg] = useState("");
+  const [backupMsgType, setBackupMsgType] = useState(""); // success | error | info
+  const [snapshots, setSnapshots] = useState(() => BackupService.listSnapshots());
+  const [backupLog, setBackupLog] = useState(() => BackupService.getLog());
+  const [storageInfo, setStorageInfo] = useState(() => BackupService.getStorageInfo());
+  const [showBackupLog, setShowBackupLog] = useState(false);
+  const [restoreConfirmKey, setRestoreConfirmKey] = useState(null);
+  const fileInputRef = useRef(null);
+
+  const refreshBackupState = useCallback(() => {
+    setSnapshots(BackupService.listSnapshots());
+    setBackupLog(BackupService.getLog());
+    setStorageInfo(BackupService.getStorageInfo());
+  }, []);
+
+  const handleManualBackup = useCallback(() => {
+    const result = BackupService.manualSnapshot(bookings);
+    setBackupMsg(result.message);
+    setBackupMsgType(result.success ? "success" : "error");
+    refreshBackupState();
+  }, [bookings, refreshBackupState]);
+
+  const handleExport = useCallback(() => {
+    const result = BackupService.exportToFile(bookings);
+    setBackupMsg(result.message);
+    setBackupMsgType(result.success ? "success" : "error");
+    refreshBackupState();
+  }, [bookings, refreshBackupState]);
+
+  const handleImport = useCallback((e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // Reject files > 10MB to prevent browser crash
+    if (file.size > 10 * 1024 * 1024) {
+      setBackupMsg("File too large (max 10MB). Got " + Math.round(file.size / 1024 / 1024) + "MB.");
+      setBackupMsgType("error");
+      e.target.value = "";
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const result = BackupService.importFromFile(ev.target.result);
+      if (result.success) {
+        // Merge: imported bookings added, existing kept, duplicates overwritten by import
+        const merged = new Map();
+        bookings.forEach(b => merged.set(b.id, b));
+        result.bookings.forEach(b => merged.set(b.id, b));
+        setBookings(Array.from(merged.values()));
+        setBackupMsg(result.message);
+        setBackupMsgType("success");
+      } else {
+        setBackupMsg(result.message);
+        setBackupMsgType("error");
+      }
+      refreshBackupState();
+    };
+    reader.onerror = () => { setBackupMsg("Failed to read file"); setBackupMsgType("error"); };
+    reader.readAsText(file);
+    e.target.value = ""; // Reset file input
+  }, [bookings, refreshBackupState]);
+
+  const handleRestore = useCallback((key) => {
+    const result = BackupService.restoreSnapshot(key);
+    if (result.success) {
+      setBookings(result.bookings);
+      setBackupMsg(result.message);
+      setBackupMsgType("success");
+    } else {
+      setBackupMsg(result.message);
+      setBackupMsgType("error");
+    }
+    setRestoreConfirmKey(null);
+    refreshBackupState();
+  }, [refreshBackupState]);
+
+  const handleDeleteSnapshot = useCallback((key) => {
+    BackupService.deleteSnapshot(key);
+    refreshBackupState();
+  }, [refreshBackupState]);
+
+  // Detect mic availability: requires HTTPS + SpeechRecognition API + not in iframe sandbox
+  const isSandboxed = useRef(false);
+  useEffect(() => {
+    try { isSandboxed.current = window.self !== window.top; } catch { isSandboxed.current = true; }
+
+    // Check 1: Secure context required for getUserMedia + SpeechRecognition
+    if (typeof window.isSecureContext !== "undefined" && !window.isSecureContext) {
+      setMicPermission("sandbox");
+      return;
+    }
+
+    // Check 2: SpeechRecognition API exists
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { setMicPermission("sandbox"); return; }
+
+    // Check 3: Can we instantiate it? (fails in some restricted environments)
+    try {
+      const test = new SR();
+      test.abort();
+    } catch { setMicPermission("sandbox"); return; }
+
+    // Check 4: getUserMedia available (needed for permission prompt)
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setMicPermission("sandbox");
+      return;
+    }
+
+    // Check existing permission state
+    if (navigator.permissions && navigator.permissions.query) {
+      navigator.permissions.query({ name: "microphone" }).then(r => {
+        if (r.state === "granted") setMicPermission("granted");
+        else if (r.state === "denied") setMicPermission("denied");
+        // "prompt" = unknown, user will be asked when they tap mic
+      }).catch(() => {});
+    }
+  }, []);
+
+  // Global keyboard shortcuts
+  useEffect(() => {
+    const handleKeyboard = (e) => {
+      // Ctrl/Cmd + Enter = confirm booking (when on booking tab)
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && view === "booking" && !showConfirm) {
+        e.preventDefault();
+        handleSubmit();
+      }
+      // Escape = close modals / dropdowns
+      if (e.key === "Escape") {
+        setShowCal(false);
+        setShowTimePicker(false);
+        if (showConfirm) setShowConfirm(null);
+        if (deleteConfirmId) setDeleteConfirmId(null);
+      }
+      // Ctrl/Cmd + F = focus search (when on dashboard)
+      if ((e.ctrlKey || e.metaKey) && e.key === "f" && view === "dashboard") {
+        e.preventDefault();
+        const searchEl = document.querySelector('input[placeholder*="Search"]') || document.querySelector('input[aria-label*="Search"]');
+        if (searchEl) searchEl.focus();
+      }
+    };
+    window.addEventListener("keydown", handleKeyboard);
+    return () => window.removeEventListener("keydown", handleKeyboard);
+  }, [view, showConfirm, deleteConfirmId, showCal, showTimePicker]);
+
+  // Close calendar/time picker when clicking outside
+  useEffect(() => {
+    if (!showCal && !showTimePicker) return;
+    const handler = (e) => {
+      if (!e.target.closest("[data-picker]")) {
+        setShowCal(false);
+        setShowTimePicker(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showCal, showTimePicker]);
+
+  // Keep micPermission ref in sync for closures (SpeechRecognition handlers)
+  useEffect(() => { micPermissionRef.current = micPermission; }, [micPermission]);
+
+  // ── Sync State ──
+  const [syncConfig, setSyncConfig] = useState(() => loadSyncConfig());
+
+  // ── Device encryption passphrase (memory only, never stored) ──
+  const [devicePassphrase, setDevicePassphrase] = useState("");
+  const [deviceBookings, setDeviceBookings]     = useState(null); // null = not yet unlocked
+  const isFirstTime = !localStorage.getItem(ENC_STORAGE_KEY) && !localStorage.getItem(STORAGE_KEY);
+
+  // ── Auto-sync ──
+  // ── Auth state ──
+  // authStatus: "loading" | "unauthenticated" | "authenticated"
+  const [authStatus, setAuthStatus]       = useState("loading");
+  const [currentUser, setCurrentUser]     = useState(null); // { username, role, displayName, token, expiresAt }
+  const AUTH_SESSION_KEY                  = "dispatch-hq-session";
+
+  const saveSession = (userData) => {
+    try { localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(userData)); } catch {}
+    setCurrentUser(userData);
+    setAuthStatus("authenticated");
+  };
+  const clearSession = () => {
+    try {
+      const s = JSON.parse(localStorage.getItem(AUTH_SESSION_KEY) || "{}");
+      if (s.token && syncConfig.endpointUrl) {
+        fetch(syncConfig.endpointUrl, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "logout", sessionToken: s.token }) }).catch(() => {});
+      }
+    } catch {}
+    try { localStorage.removeItem(AUTH_SESSION_KEY); } catch {}
+    setCurrentUser(null);
+    setDevicePassphrase("");   // wipe passphrase from memory on sign-out
+    setDeviceBookings(null);   // require re-unlock on next login
+    setAuthStatus("unauthenticated");
+  };
+
+  // Validate stored session on load
+  useEffect(() => {
+    const stored = (() => { try { return JSON.parse(localStorage.getItem(AUTH_SESSION_KEY) || "null"); } catch { return null; } })();
+    if (!stored || !stored.token || !stored.expiresAt) { setAuthStatus("unauthenticated"); return; }
+    if (new Date(stored.expiresAt) < new Date()) { clearLocalSession(); return; }
+    // Quick local check passes — set authenticated, then verify with server in background
+    setCurrentUser(stored);
+    setAuthStatus("authenticated");
+    if (syncConfig.endpointUrl) {
+      fetch(syncConfig.endpointUrl + "?action=validateSession&sessionToken=" + encodeURIComponent(stored.token), { method: "GET", redirect: "follow" })
+        .then(r => r.json())
+        .then(d => { if (!d.valid) clearLocalSession(); })
+        .catch(() => {}); // network error → keep local session
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const [passphrase, setPassphrase] = useState(""); // Cleared after key derivation
+
+  const derivedKeyRef = useRef(null); // Holds non-extractable CryptoKey
+  const [syncStatus, setSyncStatus] = useState("idle"); // idle | syncing | success | error
+  const [syncMessage, setSyncMessage] = useState("");
+  const [syncEndpointInput, setSyncEndpointInput] = useState(() => loadSyncConfig().endpointUrl);
+  const [passphraseInput, setPassphraseInput] = useState("");
+  const [showPassphraseEntry, setShowPassphraseEntry] = useState(false);
+  const [syncConfigured, setSyncConfigured] = useState(() => {
+    const c = loadSyncConfig();
+    return !!(c.endpointUrl && c.passphraseHash);
+  });
+
+  useEffect(() => { saveBookings(bookings); }, [bookings]);
+
+  // ── Sync Functions ──
+  const testConnection = useCallback(async () => {
+    if (!syncEndpointInput.trim()) { setSyncMessage("Enter an endpoint URL first"); return; }
+    if (!syncEndpointInput.trim().startsWith("https://script.google.com/")) {
+      setSyncMessage("URL must start with https://script.google.com/"); setSyncStatus("error"); return;
+    }
+    setSyncStatus("syncing"); setSyncMessage("Testing connection...");
+    try {
+      const result = await SyncService.ping(syncEndpointInput.trim(), syncConfig.authToken);
+      if (result.success) {
+        setSyncStatus("success");
+        setSyncMessage(`Connected to "${result.sheetName}" — ${result.recordCount} records stored`);
+      } else {
+        setSyncStatus("error"); setSyncMessage("Server responded with error: " + (result.error || "Unknown"));
+      }
+    } catch (err) {
+      setSyncStatus("error"); setSyncMessage("Connection failed: " + sanitizeErrorMsg(err));
+    }
+  }, [syncEndpointInput]);
+
+  const saveSyncSettings = useCallback(async () => {
+    if (!syncEndpointInput.trim() || !passphraseInput || passphraseInput.length < 8) {
+      setSyncMessage("URL required and passphrase must be 8+ characters"); setSyncStatus("error"); return;
+    }
+    if (!syncEndpointInput.trim().startsWith("https://script.google.com/")) {
+      setSyncMessage("URL must be a Google Apps Script endpoint (https://script.google.com/...)"); setSyncStatus("error"); return;
+    }
+    try {
+      const hash = await CryptoService.hashPassphrase(passphraseInput);
+      const newConfig = { endpointUrl: syncEndpointInput.trim(), passphraseHash: hash, lastSync: syncConfig.lastSync, authToken: syncConfig.authToken || "" };
+      saveSyncConfig(newConfig);
+      setSyncConfig(newConfig);
+      setPassphrase(passphraseInput);
+      setSyncConfigured(true);
+      setSyncStatus("success"); setSyncMessage("Settings saved and encryption key derived");
+    } catch (err) {
+      setSyncStatus("error"); setSyncMessage("Failed to save: " + sanitizeErrorMsg(err));
+    }
+  }, [syncEndpointInput, passphraseInput, syncConfig.lastSync]);
+
+  const unlockWithPassphrase = useCallback(async () => {
+    if (!passphraseInput) return;
+    try {
+      const hash = await CryptoService.hashPassphrase(passphraseInput);
+      if (hash === syncConfig.passphraseHash) {
+        setPassphrase(passphraseInput);
+        setShowPassphraseEntry(false);
+        setSyncStatus("success"); setSyncMessage("Unlocked — ready to sync");
+      } else {
+        setSyncStatus("error"); setSyncMessage("Incorrect passphrase");
+      }
+    } catch (err) {
+      setSyncStatus("error"); setSyncMessage("Verification failed: " + sanitizeErrorMsg(err));
+    }
+  }, [passphraseInput, syncConfig.passphraseHash]);
+
+  const syncNow = useCallback(async () => {
+    if (!syncConfig.endpointUrl || !passphrase) {
+      setSyncMessage("Configure endpoint and enter passphrase first");
+      setSyncStatus("error"); return;
+    }
+    setSyncStatus("syncing"); setSyncMessage("Encrypting and uploading...");
+    try {
+      // Derive key ONCE for the entire batch (310K PBKDF2 iterations only once)
+      const batchSalt = crypto.getRandomValues(new Uint8Array(16));
+      const batchKey = await CryptoService.deriveKey(passphrase, batchSalt);
+      const batchSaltB64 = CryptoService._bufToBase64(batchSalt);
+
+      // Encrypt all bookings with shared key, unique IV per record
+      const encryptedRecords = [];
+      for (const booking of bookings) {
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const ciphertext = await crypto.subtle.encrypt(
+          { name: "AES-GCM", iv }, batchKey,
+          new TextEncoder().encode(JSON.stringify(booking))
+        );
+        encryptedRecords.push({
+          id: booking.id,
+          encryptedData: CryptoService._bufToBase64(ciphertext),
+          iv: CryptoService._bufToBase64(iv),
+          salt: batchSaltB64,
+          deleted: false
+        });
+      }
+      // Push to remote
+      const result = await SyncService.batchSync(syncConfig.endpointUrl, encryptedRecords, syncConfig.authToken);
+      if (result.success) {
+        const now = new Date().toISOString();
+        const newConfig = { ...syncConfig, lastSync: now };
+        saveSyncConfig(newConfig); setSyncConfig(newConfig);
+        setSyncStatus("success");
+        setSyncMessage(`Synced ${result.created} new, ${result.updated} updated — ${result.totalRecords} total remote records`);
+      } else {
+        setSyncStatus("error"); setSyncMessage("Sync failed: " + (result.error || "Unknown"));
+      }
+    } catch (err) {
+      setSyncStatus("error"); setSyncMessage("Sync error: " + sanitizeErrorMsg(err));
+    }
+  }, [syncConfig, passphrase, bookings]);
+
+  const pullFromRemote = useCallback(async () => {
+    if (!syncConfig.endpointUrl || !passphrase) {
+      setSyncMessage("Configure endpoint and enter passphrase first");
+      setSyncStatus("error"); return;
+    }
+    setSyncStatus("syncing"); setSyncMessage("Downloading and decrypting...");
+    try {
+      const result = await SyncService.fetchAll(syncConfig.endpointUrl, null, syncConfig.authToken);
+      if (!result.success) { setSyncStatus("error"); setSyncMessage("Fetch failed: " + result.error); return; }
+      // Decrypt all records
+      const decrypted = [];
+      let decryptErrors = 0;
+      // Group records by salt for batch decryption (same salt = same derived key)
+      const saltGroups = {};
+      for (const record of result.records) {
+        if (record.deleted) continue;
+        if (!saltGroups[record.salt]) saltGroups[record.salt] = [];
+        saltGroups[record.salt].push(record);
+      }
+      // Derive key once per unique salt, then decrypt all records with that key
+      for (const [salt, records] of Object.entries(saltGroups)) {
+        let key;
+        try {
+          key = await CryptoService.deriveKey(passphrase, CryptoService._base64ToBuf(salt));
+        } catch { decryptErrors += records.length; continue; }
+        for (const record of records) {
+          try {
+            const ivBuf = CryptoService._base64ToBuf(record.iv);
+            const dataBuf = CryptoService._base64ToBuf(record.encryptedData);
+            const plainBuf = await crypto.subtle.decrypt({ name: "AES-GCM", iv: ivBuf }, key, dataBuf);
+            const data = JSON.parse(new TextDecoder().decode(plainBuf));
+            if (data && data.id && data.customerName) decrypted.push(data);
+          } catch { decryptErrors++; }
+        }
+      }
+      // Merge: keep newer version by modifiedAt timestamp
+      const merged = new Map();
+      let overwrittenCount = 0;
+      bookings.forEach(b => merged.set(b.id, b));
+      decrypted.forEach(b => {
+        const existing = merged.get(b.id);
+        if (!existing) {
+          merged.set(b.id, b);
+        } else if ((b.modifiedAt || "") > (existing.modifiedAt || "")) {
+          merged.set(b.id, b);
+          overwrittenCount++;
+        }
+      });
+      setBookings(Array.from(merged.values()));
+      const now = new Date().toISOString();
+      const newConfig = { ...syncConfig, lastSync: now };
+      saveSyncConfig(newConfig); setSyncConfig(newConfig);
+      setSyncStatus("success");
+      const baseMsg = `Pulled ${decrypted.length} records${decryptErrors ? ` (${decryptErrors} failed to decrypt)` : ""}`;
+      const conflictNote = overwrittenCount > 0 ? ` — ⚠️ ${overwrittenCount} booking${overwrittenCount > 1 ? "s" : ""} updated from server (another device had a newer version)` : "";
+      setSyncMessage(baseMsg + conflictNote);
+    } catch (err) {
+      setSyncStatus("error"); setSyncMessage("Pull error: " + sanitizeErrorMsg(err));
+    }
+  }, [syncConfig, passphrase, bookings]);
+
+  // Track if dispatcher manually edited payment (prevents auto-fill overwrite)
+
+  // ── Auto-sync (declared after passphrase to avoid temporal dead zone) ──
+  const [autoSyncEnabled, setAutoSyncEnabled] = useState(() => {
+    try { return localStorage.getItem("dispatch-hq-autosync") === "true"; } catch { return false; }
+  });
+  const [autoSyncInterval, setAutoSyncInterval] = useState(() => {
+    try { return parseInt(localStorage.getItem("dispatch-hq-autosync-interval") || "30"); } catch { return 30; }
+  });
+  const autoSyncRef = useRef(null);
+
+  useEffect(() => {
+    if (autoSyncRef.current) { clearInterval(autoSyncRef.current); autoSyncRef.current = null; }
+    if (!autoSyncEnabled || !syncConfig.endpointUrl || !passphrase) return;
+    autoSyncRef.current = setInterval(async () => {
+      if (syncStatus === "syncing") return;
+      syncNow();
+    }, autoSyncInterval * 60 * 1000);
+    return () => { if (autoSyncRef.current) clearInterval(autoSyncRef.current); };
+  }, [autoSyncEnabled, autoSyncInterval, syncConfig.endpointUrl, passphrase, syncStatus]);
+
+  const [paymentManuallyEdited, setPaymentManuallyEdited] = useState(false);
+
+  // ── Instant local fare lookup (no API call) ──
+  useEffect(() => {
+    if (form.pickupAddress && form.dropoffAddress) {
+      const result = lookupFlatRate(form.pickupAddress, form.dropoffAddress);
+      setManualFare(result);
+      // Only auto-fill if dispatcher hasn't manually edited the payment
+      if (result.found && !paymentManuallyEdited) {
+        const total = form.tripType === "round-trip" ? (result.baseFare * 2 + result.toll * 2) : result.total;
+        const pax = parseInt(form.passengers) || 1;
+        const extra = pax >= 5 ? Math.ceil((pax - 4) * 10) : 0;
+        setForm(p => ({ ...p, paymentAmount: String(total + extra) }));
+      }
+    } else {
+      setManualFare(null);
+    }
+  }, [form.pickupAddress, form.dropoffAddress, form.tripType, form.passengers, paymentManuallyEdited]);
+
+  // ── AI Assist: Parallel flight + fare lookup via Anthropic API ──
+  const runAIAssistHandler = useCallback(async () => {
+    setAiLoading(true); setAiError(""); setFlightData(null); setFareData(null); setAiSummary("");
+    setAiTimer(0);
+    aiTimerRef.current = setInterval(() => setAiTimer(t => t + 1), 1000);
+    try {
+      const result = await runAIAssist(
+        form.flightNumber, form.airline, "", form.date,
+        form.pickupAddress, form.dropoffAddress, form.tripType,
+        parseInt(form.passengers) || 1
+      );
+      if (result.error) setAiError(result.error);
+      // Validate flight result — must have at least status or flight_number to display
+      if (result.flight && !result.flight.error && (result.flight.status || result.flight.flight_number)) {
+        if (result.flight.delay_minutes != null) result.flight.delay_minutes = Number(result.flight.delay_minutes) || 0;
+        setFlightData(result.flight);
+        if (result.flight.airline && result.flight.flight_number && !form.airline) {
+          setForm(p => ({ ...p, airline: sanitize(result.flight.airline, 50) }));
+        }
+        if (result.flight.flight_number && result.flight.flight_number !== form.flightNumber) {
+          setForm(p => ({ ...p, flightNumber: sanitize(result.flight.flight_number, 20) }));
+        }
+      }
+      // Validate fare result
+      if (result.fare && (result.fare.found || result.fare.total)) {
+        setFareData(result.fare);
+        if (result.fare.total) {
+          setForm(p => ({ ...p, paymentAmount: String(result.fare.total) }));
+        }
+      }
+      if (result.summary) setAiSummary(result.summary);
+      if (result.text && !result.summary) setAiSummary(result.text);
+    } catch (err) {
+      setAiError("AI Assist error: " + sanitizeErrorMsg(err));
+    } finally {
+      setAiLoading(false);
+      clearInterval(aiTimerRef.current);
+    }
+  }, [form.flightNumber, form.airline, form.date, form.pickupAddress, form.dropoffAddress, form.tripType, form.passengers]);
+
+  // ── Quick flight-only lookup ──
+  const lookupFlightOnly = useCallback(async () => {
+    if (!form.flightNumber && !form.airline) return;
+    setAiLoading(true); setAiError(""); setFlightData(null); setFareData(null); setAiSummary("");
+    setAiTimer(0);
+    aiTimerRef.current = setInterval(() => setAiTimer(t => t + 1), 1000);
+    try {
+      const result = await executeFlight({
+        flight_number: form.flightNumber,
+        airline: form.airline,
+        city: "",
+        date: form.date
+      });
+      if (result.error || result.status === "error") {
+        setAiError(result.error || "Flight lookup failed");
+        // If there's raw_info, show it as a summary instead of broken card
+        // raw_info removed for security — don't expose raw API responses
+      } else {
+        setFlightData(result);
+        // Auto-fill airline only from valid structured results
+        if (result.airline && result.flight_number && !form.airline) {
+          setForm(p => ({ ...p, airline: sanitize(result.airline, 50) }));
+        }
+        // Auto-fill flight number if returned in different format
+        if (result.flight_number && result.flight_number !== form.flightNumber) {
+          setForm(p => ({ ...p, flightNumber: sanitize(result.flight_number, 20) }));
+        }
+      }
+    } catch (err) {
+      setAiError("Flight lookup error: " + sanitizeErrorMsg(err));
+    } finally {
+      setAiLoading(false);
+      clearInterval(aiTimerRef.current);
+    }
+  }, [form.flightNumber, form.airline, form.date]);
+
+  // ── Speech Recognition (sandbox-aware, mic optional) ──
+  const isStoppingRef = useRef(false);
+  const finalTranscriptRef = useRef("");
+  const interimRef = useRef("");
+  const silenceTimerRef = useRef(null);
+
+  const startRecognition = useCallback(() => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { setMicPermission("sandbox"); return; }
+    if (recognitionRef.current) {
+      try { recognitionRef.current.abort(); } catch {}
+    }
+    isStoppingRef.current = false;
+    finalTranscriptRef.current = "";
+    interimRef.current = "";
+    setTranscript("");
+
+    const r = new SR();
+    r.lang = speechLang;
+    r.interimResults = true;
+    r.continuous = true;
+    r.maxAlternatives = 1;
+
+    // Auto-shutoff: stop mic after 10 seconds of silence
+    const resetSilenceTimer = () => {
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = setTimeout(() => {
+        if (recognitionRef.current && !isStoppingRef.current) {
+          isStoppingRef.current = true;
+          try { recognitionRef.current.stop(); } catch {}
+          setIsListening(false);
+          if (finalTranscriptRef.current) {
+            setTranscript(finalTranscriptRef.current);
+            setVoiceError("Mic auto-stopped after 10s of silence. Tap Quick Fill to parse, or tap mic to record again.");
+          } else {
+            setVoiceError("No speech detected — mic stopped. Tap the mic button to try again, or type below.");
+          }
+        }
+      }, 10000);
+    };
+
+    r.onstart = () => {
+      setIsListening(true); setVoiceError(""); setMicPermission("granted");
+      resetSilenceTimer(); // Start the 10s countdown
+    };
+    r.onresult = (e) => {
+      let fin = "", inter = "";
+      for (let i = 0; i < e.results.length; i++) {
+        if (e.results[i].isFinal) fin += e.results[i][0].transcript;
+        else inter += e.results[i][0].transcript;
+      }
+      finalTranscriptRef.current = fin;
+      interimRef.current = inter;
+      setTranscript(fin + (inter ? "..." + inter : ""));
+      resetSilenceTimer(); // Reset the timer — speech was detected
+    };
+    r.onerror = (e) => {
+      if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
+      if (e.error === "not-allowed" || e.error === "permission-denied") {
+        setMicPermission("denied"); setIsListening(false);
+        setVoiceError("Mic access denied. On iOS: Settings \u2192 Safari \u2192 Microphone \u2192 Allow. Or just type below.");
+        return;
+      }
+      if (e.error === "no-speech" || e.error === "aborted") return;
+      if (e.error === "network" || e.error === "service-not-allowed") {
+        setIsListening(false);
+        setVoiceError("Speech service error — check your internet connection and try again. If this persists, type below and use Quick Fill.");
+        return;
+      }
+    };
+    r.onend = () => {
+      if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
+      // Only auto-restart if user didn't manually stop AND mic permission is confirmed
+      // Use ref (not closure) because micPermission state may have changed since startRecognition was called
+      if (!isStoppingRef.current && recognitionRef.current && micPermissionRef.current === "granted") {
+        try { recognitionRef.current.start(); } catch { setIsListening(false); }
+        return;
+      }
+      setIsListening(false);
+      if (finalTranscriptRef.current) setTranscript(finalTranscriptRef.current);
+    };
+    try { r.start(); recognitionRef.current = r; }
+    catch { setMicPermission("sandbox"); setIsListening(false); }
+  }, [speechLang]);
+
+  // Request mic via getUserMedia (triggers native iOS/browser permission dialog)
+  const requestMicPermission = useCallback(async () => {
+    setShowMicPrompt(false);
+    setVoiceError("");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach(t => t.stop());
+      setMicPermission("granted");
+      startRecognition();
+    } catch (err) {
+      if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+        setMicPermission("denied");
+        setVoiceError("Mic access denied. Reload the page and tap Allow when prompted.");
+      } else if (err.name === "NotFoundError") {
+        setMicPermission("sandbox");
+        setVoiceError("No microphone detected on this device. Type your booking info below and tap Quick Fill.");
+      } else {
+        setVoiceError("Microphone error: " + (err.message || "unknown") + ". Try reloading the page. Or type below and use Quick Fill.");
+      }
+    }
+  }, [startRecognition]);
+
+  // Main mic button handler — ONE prompt only (browser's native SpeechRecognition prompt)
+  const startListening = useCallback(() => {
+    setVoiceError("");
+    if (micPermission === "sandbox") {
+      setVoiceError("Microphone requires HTTPS. Deploy to a web host (Netlify, GitHub Pages) or use localhost. For now, type below and tap Quick Fill.");
+      return;
+    }
+    if (micPermission === "denied") {
+      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+      const hint = isIOS ? "On iOS: Settings → Safari → Microphone → Allow"
+        : "Click the mic icon in your browser's address bar, or go to site settings to allow microphone";
+      setVoiceError("Mic access denied. " + hint + ". Then tap the mic button again.");
+      return;
+    }
+    // For both "granted" AND "unknown" — just start SpeechRecognition directly.
+    // The browser will show its own single native permission prompt if needed.
+    // No custom modal. No getUserMedia. One prompt, maximum.
+    startRecognition();
+  }, [micPermission, startRecognition]);
+
+  // Per-field mic — speaks into one address field only
+  const startFieldMic = useCallback((fieldName) => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { setVoiceError("Speech recognition not available in this browser. Use Chrome or Safari."); return; }
+    if (!window.isSecureContext) { setVoiceError("Microphone requires HTTPS."); return; }
+    if (fieldMicRef.current) { try { fieldMicRef.current.abort(); } catch {} }
+    const r = new SR();
+    r.continuous = false;
+    r.interimResults = false;
+    r.lang = speechLang || "en-US";
+    r.maxAlternatives = 1;
+    r.onstart = () => setFieldMicActive(fieldName);
+    r.onresult = (e) => {
+      const spoken = (e.results[0][0].transcript || "").trim();
+      if (spoken) setForm(p => ({ ...p, [fieldName]: sanitize(spoken, 200) }));
+    };
+    r.onerror = (e) => {
+      if (e.error !== "no-speech" && e.error !== "aborted") {
+        setVoiceError(e.error === "not-allowed" ? "Mic access denied. Click the mic icon in your address bar to allow." : "Mic error: " + e.error + ". Try again.");
+      }
+      setFieldMicActive(null);
+    };
+    r.onend = () => setFieldMicActive(null);
+    fieldMicRef.current = r;
+    try { r.start(); } catch (err) { setFieldMicActive(null); setVoiceError("Could not start microphone. Try again."); }
+  }, [speechLang]);
+
+  const stopFieldMic = useCallback(() => {
+    if (fieldMicRef.current) { try { fieldMicRef.current.stop(); } catch {} }
+    setFieldMicActive(null);
+  }, []);
+
+  const stopListening = useCallback(() => {
+    isStoppingRef.current = true;
+    if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
+    if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch {} }
+    setIsListening(false);
+    // Consolidate: merge final + interim into one clean string
+    const final = (finalTranscriptRef.current || "").trim();
+    const interim = (interimRef.current || "").trim();
+    const combined = (final + (interim ? " " + interim : "")).trim();
+    if (combined) {
+      finalTranscriptRef.current = combined;
+      setTranscript(combined);
+    }
+  }, []);
+
+  // ── Local Regex Fallback Parser (no API needed) ──
+  const parseTranscriptLocal = useCallback(() => {
+    // Read visible text from state (more reliable than ref which may miss interim results)
+    const raw = transcript || finalTranscriptRef.current || "";
+    // Strip leading "..." from interim speech results
+    const text = raw.replace(/^\.{2,}\s*/, "").replace(/\.{2,}/g, " ").trim();
+    if (!text || text.length < 3) return;
+    const t = text.toLowerCase().trim();
+    const updates = {};
+
+    // ── Date — "March 30", "3/30", "March 30th", "Jan 2", "2025-03-30", "tomorrow", "today" ──
+    const months = { jan:1,january:1,feb:2,february:2,mar:3,march:3,apr:4,april:4,may:5,jun:6,june:6,jul:7,july:7,aug:8,august:8,sep:9,september:9,oct:10,october:10,nov:11,november:11,dec:12,december:12 };
+    const dateMatch = t.match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/)  // 2025-03-30
+      || t.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/)  // 3/30/2025 or 3/30/25
+      || t.match(/(\d{1,2})[\/\-](\d{1,2})(?!\d)/);  // 3/30
+    const dateWordMatch = t.match(/(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,?\s*(\d{4}))?/i);
+    
+    if (dateMatch) {
+      if (dateMatch[0].match(/^\d{4}/)) {
+        // YYYY-MM-DD
+        updates.date = `${dateMatch[1]}-${dateMatch[2].padStart(2,"0")}-${dateMatch[3].padStart(2,"0")}`;
+      } else if (dateMatch[3]) {
+        // M/D/YYYY
+        const yr = dateMatch[3].length === 2 ? "20" + dateMatch[3] : dateMatch[3];
+        updates.date = `${yr}-${dateMatch[1].padStart(2,"0")}-${dateMatch[2].padStart(2,"0")}`;
+      } else {
+        // M/D (current year)
+        const yr = new Date().getFullYear();
+        updates.date = `${yr}-${dateMatch[1].padStart(2,"0")}-${dateMatch[2].padStart(2,"0")}`;
+      }
+    } else if (dateWordMatch) {
+      const m = months[dateWordMatch[1].toLowerCase()];
+      const d = parseInt(dateWordMatch[2]);
+      const yr = dateWordMatch[3] ? parseInt(dateWordMatch[3]) : new Date().getFullYear();
+      if (m && d) updates.date = `${yr}-${String(m).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+    } else if (/\btomorrow\b|내일/.test(t)) {
+      const tm = new Date(); tm.setDate(tm.getDate() + 1);
+      updates.date = tm.toISOString().split("T")[0];
+    } else if (/\btoday\b|오늘/.test(t)) {
+      updates.date = new Date().toISOString().split("T")[0];
+    }
+
+    // ── Time — "3 PM", "3:30 PM", "15:00", "at 10 AM", "오후 3시" ──
+    const timeMatch = t.match(/(?:at\s+)?(\d{1,2})\s*:\s*(\d{2})\s*(am|pm|a\.m\.|p\.m\.)?/i)
+      || t.match(/(?:at\s+)?(\d{1,2})\s*(am|pm|a\.m\.|p\.m\.)/i)
+      || t.match(/오전\s*(\d{1,2})\s*시/)
+      || t.match(/오후\s*(\d{1,2})\s*시/);
+    if (timeMatch) {
+      let hr = parseInt(timeMatch[1]);
+      let min = timeMatch[2] && /^\d+$/.test(timeMatch[2]) ? timeMatch[2] : "00";
+      let ampm = (timeMatch[3] || timeMatch[2] || "").toLowerCase().replace(/\./g, "");
+      // Korean 오후 = PM
+      if (/오후/.test(t.slice(Math.max(0, t.indexOf(timeMatch[0]) - 3), t.indexOf(timeMatch[0]) + timeMatch[0].length))) ampm = "pm";
+      if (/오전/.test(t.slice(Math.max(0, t.indexOf(timeMatch[0]) - 3), t.indexOf(timeMatch[0]) + timeMatch[0].length))) ampm = "am";
+      
+      if (ampm === "pm" && hr < 12) hr += 12;
+      if (ampm === "am" && hr === 12) hr = 0;
+      
+      // Convert to 12h slot format matching AM_SLOTS/PM_SLOTS
+      const h12 = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr;
+      const suffix = hr >= 12 ? "PM" : "AM";
+      const minRound = parseInt(min) >= 30 ? "30" : "00";
+      updates.timeSlot = `${h12}:${minRound} ${suffix}`;
+    }
+
+    // ── Payment — "$70", "70 dollars", "70달러" — match BEFORE pickup/dropoff so we can exclude it ──
+    const payMatch = t.match(/\$\s?(\d+(?:[.,]\d+)?)/i)
+      || t.match(/(\d+(?:[.,]\d+)?)\s*(?:dollar|dollars|달러|불)/i)
+      || t.match(/(?:payment|pay|금액|fare)\s*[:]?\s*\$?\s*(\d+(?:[.,]\d+)?)/i);
+    if (payMatch) updates.paymentAmount = payMatch[1].replace(/[,.]/g, "");
+
+    // ── Flight — "KE81", "flight KE 81", IATA code — match BEFORE pickup/dropoff ──
+    const flightMatch = t.match(/(?:flight|편명?|편\s*)\s*[:]?\s*([a-z]{2}\s?\d{1,5})/i)
+      || t.match(/\b([a-z]{2}\s?\d{2,5})\b/i);
+    if (flightMatch) updates.flightNumber = flightMatch[1].toUpperCase().replace(/\s/g, "");
+
+    // ── Airline — known carriers or keyword ──
+    const airlineMatch = t.match(/\b(korean\s*air|asiana|united(?:\s*airlines?)?|delta(?:\s*(?:air\s*lines?)?)?|american(?:\s*airlines?)?|jetblue|southwest|spirit|frontier|alaska(?:\s*airlines?)?|eva\s*air|cathay\s*pacific|japan\s*airlines?|ana|대한항공|아시아나)\b/i)
+      || t.match(/(?:airline|항공|항공사)\s*[:]?\s*([a-z가-힣][a-z가-힣\s]{1,25}?)(?=\s+(?:flight|편|\b[a-z]{2}\d))/i);
+    if (airlineMatch) updates.airline = airlineMatch[1].trim();
+
+    // ── Driver — "driver 19", "기사 08" ──
+    const drvMatch = t.match(/(?:driver|기사|드라이버)\s*[#]?\s*(\d{1,2})/i);
+    if (drvMatch) updates.driverNumber = drvMatch[1].padStart(2, "0");
+
+    // ── Name — "name X", "고객 X", or first capitalized words in original text ──
+    const nameMatch = t.match(/(?:name\s*(?:is)?|이름\s*(?:은|이)?|customer|고객)\s*[:]?\s*([a-z가-힣][a-z가-힣\s.]{1,30}?)(?=\s*(?:pickup|pick\s*up|phone|from|to|에서|까지|airline|flight|passenger|luggage|편도|왕복|드라이버|driver|at\s+\d|\d{3,}|\$))/i)
+      || t.match(/(?:name\s*(?:is)?|이름\s*(?:은|이)?|customer|고객)\s*[:]?\s*([a-z가-힣][a-z가-힣\s.]{1,30})/i);
+    if (nameMatch) {
+      const n = nameMatch[1].trim();
+      // Only accept if it looks like a name (not an airport or address keyword)
+      if (n.length >= 2 && !/^(jfk|lga|ewr|newark|laguardia|manhattan|brooklyn|queens|flushing|from|to|pickup|drop)$/i.test(n)) {
+        updates.customerName = n;
+      }
+    }
+    // Fallback: if no name keyword, try first word(s) from original text that look like a name
+    if (!updates.customerName) {
+      const origWords = text.trim().split(/\s+/);
+      const nameWords = [];
+      for (const w of origWords) {
+        // Stop at keywords/numbers
+        if (/^(from|to|pickup|drop|phone|flight|airline|driver|at|\d|JFK|LGA|EWR)/i.test(w)) break;
+        if (/^[A-Z가-힣]/.test(w) && w.length >= 2) nameWords.push(w);
+        else break;
+      }
+      if (nameWords.length >= 1 && nameWords.length <= 4) {
+        const candidate = nameWords.join(" ");
+        if (!/^(JFK|LGA|EWR|Manhattan|Brooklyn|Queens)/i.test(candidate)) {
+          updates.customerName = candidate;
+        }
+      }
+    }
+
+    // ── Phone — "phone X", or standalone phone pattern ──
+    const phoneMatch = t.match(/(?:phone|전화|번호|call|연락처)\s*[:]?\s*([\d\s\-().]{7,})/i)
+      || t.match(/((?:\+?1[\s-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4})/);
+    if (phoneMatch) updates.phone = phoneMatch[1].replace(/[\s\-().]/g, "");
+
+    // ── Trip type ──
+    if (/round\s*trip|왕복/.test(t)) updates.tripType = "round-trip";
+    else if (/one\s*way|편도/.test(t)) updates.tripType = "one-way";
+
+    // ── Passengers ──
+    const paxMatch = t.match(/(\d+)\s*(?:passenger|passengers|명|사람|people|person|pax)/i);
+    if (paxMatch) updates.passengers = paxMatch[1];
+
+    // ── Luggage ──
+    const lugMatch = t.match(/(\d+)\s*(?:luggage|bag|bags|짐|가방|개|suitcase|캐리어)/i);
+    if (lugMatch) updates.luggage = lugMatch[1];
+
+    // ── Pickup & Dropoff — parse LAST so we can exclude already-matched fields ──
+    // Build a "cleaned" version of the text with matched items removed to prevent bleed
+    let cleaned = t;
+    // Remove known matches to avoid them bleeding into pickup/dropoff
+    if (updates.date) cleaned = cleaned.replace(dateWordMatch ? dateWordMatch[0].toLowerCase() : (dateMatch ? dateMatch[0] : ""), " ");
+    if (timeMatch) cleaned = cleaned.replace(timeMatch[0].toLowerCase(), " ");
+    if (payMatch) cleaned = cleaned.replace(payMatch[0].toLowerCase(), " ");
+    if (flightMatch) cleaned = cleaned.replace(flightMatch[0].toLowerCase(), " ");
+    if (drvMatch) cleaned = cleaned.replace(drvMatch[0].toLowerCase(), " ");
+    if (paxMatch) cleaned = cleaned.replace(paxMatch[0].toLowerCase(), " ");
+    if (lugMatch) cleaned = cleaned.replace(lugMatch[0].toLowerCase(), " ");
+    cleaned = cleaned.replace(/\s+/g, " ").trim();
+
+    // Airport codes as standalone pickup
+    const airportCodes = { jfk: "JFK", lga: "LaGuardia", ewr: "Newark EWR", "la guardia": "LaGuardia", laguardia: "LaGuardia", newark: "Newark EWR", kennedy: "JFK" };
+
+    const pickupMatch = cleaned.match(/(?:pickup|pick\s*up|from|출발|에서)\s*[:]?\s*(.+?)(?=\s*(?:\bto\b|\bdrop|도착|까지)|$)/i);
+    const dropoffMatch = cleaned.match(/(?:\bto\b|drop\s*off?|도착|까지)\s*[:]?\s*(.+?)(?=\s*(?:airline|항공|korean|united|delta|american|asiana|jetblue|driver|기사|one\s*way|round|편도|왕복)|$)/i);
+
+    if (pickupMatch) {
+      let pu = pickupMatch[1].trim().replace(/\s+/g, " ");
+      // Normalize airport codes
+      for (const [key, val] of Object.entries(airportCodes)) {
+        if (pu.toLowerCase() === key || pu.toLowerCase().startsWith(key + " ")) { pu = val; break; }
+      }
+      if (pu.length >= 2) updates.pickupAddress = pu;
+    }
+
+    if (dropoffMatch) {
+      let doff = dropoffMatch[1].trim().replace(/\s+/g, " ");
+      for (const [key, val] of Object.entries(airportCodes)) {
+        if (doff.toLowerCase() === key || doff.toLowerCase().startsWith(key + " ")) { doff = val; break; }
+      }
+      if (doff.length >= 2) updates.dropoffAddress = doff;
+    }
+
+    // Fallback: if no keywords, try "AIRPORT to DESTINATION" pattern
+    if (!updates.pickupAddress && !updates.dropoffAddress) {
+      const simpleMatch = cleaned.match(/\b(jfk|lga|ewr|laguardia|newark|kennedy)\b\s+(?:to)\s+(.+?)(?=\s+(?:korean|united|delta|american|airline|driver|기사|\d+\s*dollar)|$)/i);
+      if (simpleMatch) {
+        updates.pickupAddress = airportCodes[simpleMatch[1].toLowerCase()] || simpleMatch[1].toUpperCase();
+        updates.dropoffAddress = simpleMatch[2].trim();
+      }
+    }
+
+    if (Object.keys(updates).length > 0) {
+      setForm(prev => ({
+        ...prev,
+        ...(updates.customerName && { customerName: sanitize(updates.customerName) }),
+        ...(updates.phone && { phone: sanitizePhone(updates.phone) }),
+        ...(updates.pickupAddress && { pickupAddress: sanitize(updates.pickupAddress) }),
+        ...(updates.dropoffAddress && { dropoffAddress: sanitize(updates.dropoffAddress) }),
+        ...(updates.airline && { airline: sanitize(updates.airline, 50) }),
+        ...(updates.flightNumber && { flightNumber: sanitize(updates.flightNumber, 20) }),
+        ...(updates.passengers && { passengers: sanitizeNumeric(updates.passengers) }),
+        ...(updates.luggage && { luggage: sanitizeNumeric(updates.luggage) }),
+        ...(updates.tripType && { tripType: updates.tripType }),
+        ...(updates.paymentAmount && { paymentAmount: sanitizeNumeric(updates.paymentAmount) }),
+        ...(updates.driverNumber && { driverNumber: sanitizeDriverId(updates.driverNumber) }),
+        ...(updates.date && { date: updates.date }),
+        ...(updates.timeSlot && { timeSlot: updates.timeSlot }),
+      }));
+      setParsedFields(updates);
+      setParseStatus("done");
+    } else {
+      setVoiceError("Could not parse any fields. Try saying something like: 'Kim Min Ho from JFK to Manhattan March 30 3 PM Korean Air KE81 driver 19 $70'");
+      setParseStatus("idle");
+    }
+  }, [transcript]);
+
+  // Auto-fill form when mic stops and there's text
+  const wasListeningRef = useRef(false);
+  useEffect(() => {
+    if (wasListeningRef.current && !isListening && transcript.trim().length >= 3) {
+      // Small delay to let React state flush
+      const timer = setTimeout(() => { parseTranscriptLocal(); }, 300);
+      return () => clearTimeout(timer);
+    }
+    wasListeningRef.current = isListening;
+  }, [isListening, transcript, parseTranscriptLocal]);
+
+  // ── AI-Powered Transcript Parser (handles Konglish naturally) ──
+  const [parseStatus, setParseStatus] = useState("idle"); // idle | parsing | done
+  const [parsedFields, setParsedFields] = useState(null);
+
+  const parseTranscriptAI = useCallback(async () => {
+    const text = finalTranscriptRef.current || transcript;
+    if (!text || text.trim().length < 3) return;
+
+    setParseStatus("parsing");
+    try {
+      const resp = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1000,
+          system: `You extract taxi booking fields from dispatcher speech (often Konglish — mixed Korean/English).
+Return ONLY a JSON object (no markdown, no backticks, no explanation). Every field is a string or null.
+Fields: customer_name, phone, pickup_address, dropoff_address, airline, flight_number, passengers (number as string), luggage (number as string), trip_type ("one-way" or "round-trip" or null), payment_amount (number as string), driver_number (two-digit string like "08").
+
+Rules:
+- Extract what you can, null for anything not mentioned
+- Korean names: romanize (e.g. 김민호 → Kim Minho) AND keep hangul in parentheses
+- Phone: digits only, no spaces
+- Airports: normalize to code (JFK, LGA, EWR)
+- Flight: uppercase IATA format (e.g. KE81, UA123)
+- Driver: pad to 2 digits (8 → "08")
+- If they say a city/area name for pickup/dropoff, keep it as-is
+- payment_amount: digits only, strip currency words
+- "편도" = one-way, "왕복" = round-trip
+- "명" or "사람" after a number = passengers
+- "개" or "짐" or "가방" after a number = luggage`,
+          messages: [{ role: "user", content: `Dispatcher said: "${text}"` }]
+        })
+      });
+      const data = await resp.json();
+      const aiText = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("");
+      const parsed = JSON.parse(aiText.replace(/```json|```/g, "").trim());
+      setParsedFields(parsed);
+
+      // Auto-fill form with parsed fields
+      const updates = {};
+      if (parsed.customer_name) updates.customerName = sanitize(parsed.customer_name);
+      if (parsed.phone) updates.phone = sanitizePhone(parsed.phone);
+      if (parsed.pickup_address) updates.pickupAddress = sanitize(parsed.pickup_address);
+      if (parsed.dropoff_address) updates.dropoffAddress = sanitize(parsed.dropoff_address);
+      if (parsed.airline) updates.airline = sanitize(parsed.airline, 50);
+      if (parsed.flight_number) updates.flightNumber = sanitize(parsed.flight_number, 20);
+      if (parsed.passengers) updates.passengers = sanitizeNumeric(parsed.passengers);
+      if (parsed.luggage) updates.luggage = sanitizeNumeric(parsed.luggage);
+      if (parsed.trip_type === "one-way" || parsed.trip_type === "round-trip") updates.tripType = parsed.trip_type;
+      if (parsed.payment_amount) updates.paymentAmount = sanitizeNumeric(parsed.payment_amount);
+      if (parsed.driver_number) updates.driverNumber = sanitizeDriverId(parsed.driver_number);
+
+      if (Object.keys(updates).length > 0) {
+        setForm(prev => ({ ...prev, ...updates }));
+      }
+      setParseStatus("done");
+    } catch (err) {
+      console.error("AI parse error:", err);
+      // Fallback to local regex parsing
+      parseTranscriptLocal();
+      setParseStatus("done");
+    }
+  }, [transcript]);
+
+
+  // Airport detection — drives airline/flight requirement and greying
+  const isAirportTrip = useMemo(() => {
+    const AIRPORT_CODES = ["JFK", "LGA", "EWR"];
+    const pu = normalizeLocation(form.pickupAddress);
+    const do_ = normalizeLocation(form.dropoffAddress);
+    return AIRPORT_CODES.includes(pu) || AIRPORT_CODES.includes(do_);
+  }, [form.pickupAddress, form.dropoffAddress]);
+
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const handleSubmit = () => {
+    if (isSubmitting) return;
+    setFormError("");
+    setMissingFields([]);
+
+    // Validate ALL fields — collect every missing one with clear labels
+    const checks = [
+      { key: "customerName", label: "Customer Name", required: true, empty: !form.customerName.trim() },
+      { key: "phone", label: "Phone Number", required: true, empty: !form.phone.trim() || form.phone.replace(/[^0-9]/g,"").length < 7 },
+      { key: "pickupAddress", label: "Pickup Address", required: true, empty: !form.pickupAddress.trim() },
+      { key: "dropoffAddress", label: "Dropoff Address", required: true, empty: !form.dropoffAddress.trim() },
+      { key: "date", label: "Date", required: true, empty: !form.date },
+      { key: "timeSlot", label: "Fleet Assignment", required: true, empty: !form.timeSlot && !form.customTime },
+      { key: "airline", label: "Airline", required: isAirportTrip, empty: isAirportTrip && !form.airline.trim() },
+      { key: "flightNumber", label: "Flight #", required: isAirportTrip, empty: isAirportTrip && !form.flightNumber.trim() },
+      { key: "driverNumber", label: "Driver", required: true, empty: !form.driverNumber },
+      { key: "paymentAmount", label: "Payment", required: true, empty: !form.paymentAmount.trim() || parseFloat(form.paymentAmount) === 0 },
+    ];
+
+    const requiredMissing = checks.filter(c => c.required && c.empty);
+    const optionalMissing = checks.filter(c => !c.required && c.empty);
+    const allMissingKeys = checks.filter(c => c.empty).map(c => c.key);
+
+    if (requiredMissing.length > 0) {
+      setMissingFields(allMissingKeys); // Highlight ALL empty fields (required + optional)
+      setFormError("__FIELDS__:" + JSON.stringify(requiredMissing.map(c => c.label)) + "|" + JSON.stringify(optionalMissing.map(c => c.label)));
+      return;
+    }
+
+    // If only optional fields missing, warn once then allow
+    if (optionalMissing.length > 0 && !formError.startsWith("__OK__")) {
+      setMissingFields(allMissingKeys);
+      setFormError("__OK__:" + JSON.stringify(optionalMissing.map(c => c.label)));
+      return;
+    }
+
+    setIsSubmitting(true);
+    setMissingFields([]);
+    setTimeout(() => setIsSubmitting(false), 1000);
+
+    // Duplicate booking check
+    const dupBooking = bookings.find(b =>
+      !b.deleted && (!editingBooking || b.id !== editingBooking.id) &&
+      b.phone && form.phone &&
+      b.phone.replace(/[^0-9]/g,"") === form.phone.replace(/[^0-9]/g,"") &&
+      b.date === form.date && b.timeSlot === form.timeSlot
+    );
+    if (dupBooking && !window.dupConfirmed) {
+      window.dupConfirmed = true;
+      setIsSubmitting(false);
+      setFormError(`⚠️ Possible duplicate — a booking already exists for this phone at ${form.timeSlot}. Tap Confirm again to book anyway.`);
+      setTimeout(() => { window.dupConfirmed = false; }, 5000);
+      return;
+    }
+    window.dupConfirmed = false;
+    // Past-date warning
+    const todayDateStr = new Date().toISOString().split("T")[0];
+    if (form.date && form.date < todayDateStr) {
+      if (!window.pastDateConfirmed) {
+        window.pastDateConfirmed = true;
+        setIsSubmitting(false);
+        setFormError("⚠️ This date is in the past. Tap Confirm again to book anyway.");
+        setTimeout(() => { window.pastDateConfirmed = false; }, 4000);
+        return;
+      }
+      window.pastDateConfirmed = false;
+    }
+    // Sanitize all fields before saving
+    const booking = {
+      customerName: sanitize(form.customerName),
+      pickupAddress: sanitize(form.pickupAddress),
+      dropoffAddress: sanitize(form.dropoffAddress),
+      airline: sanitize(form.airline, 50),
+      flightNumber: sanitize(form.flightNumber, 20),
+      passengers: sanitizeNumeric(form.passengers) || "1",
+      luggage: sanitizeNumeric(form.luggage) || "0",
+      tripType: ["one-way","round-trip"].includes(form.tripType) ? form.tripType : "one-way",
+      phone: sanitizePhone(form.phone),
+      paymentAmount: sanitizeNumeric(form.paymentAmount),
+      driverNumber: sanitizeDriverId(form.driverNumber),
+      date: sanitize(form.date, 10),
+      timeSlot: sanitize(form.timeSlot || form.customTime, 12),
+      id: editingBooking ? editingBooking.id : generateSecureId(),
+      createdAt: editingBooking ? editingBooking.createdAt : new Date().toISOString(),
+      modifiedAt: new Date().toISOString(),
+      // Attach flight & fare data if available
+      flightStatus: flightData ? sanitize(flightData.status || "", 20) : "",
+      flightArrival: flightData ? sanitize(flightData.scheduled_arrival || flightData.actual_arrival || "", 30) : "",
+      fareRoute: fareData && fareData.route ? sanitize(fareData.route, 60) : (manualFare && manualFare.found ? manualFare.message : ""),
+      fareBreakdown: fareData ? `$${fareData.base_fare || 0}${fareData.toll ? ` +$${fareData.toll} toll` : ""}` : ""
+    };
+    if (editingBooking) {
+      setBookings(prev => prev.map(b => b.id === editingBooking.id ? { ...booking, id: editingBooking.id } : b));
+      setEditingBooking(null);
+    } else {
+      setBookings(prev => [...prev, booking]);
+    }
+    setShowConfirm(booking);
+    setForm({...INIT_FORM});
+    // Clear AI state + manual payment flag
+    setFlightData(null); setFareData(null); setAiSummary(""); setAiError(""); setManualFare(null);
+    setPaymentManuallyEdited(false);
+    setMissingFields([]);
+  };
+
+  const deleteBooking = (id) => {
+    setDeleteConfirmId(id);
+  };
+  const confirmDelete = () => {
+    if (deleteConfirmId) {
+      setBookings(prev => prev.filter(b => b.id !== deleteConfirmId));
+      setDeleteConfirmId(null);
+    }
+  };
+
+  const editBooking = (b) => {
+    setForm({ customerName: b.customerName, pickupAddress: b.pickupAddress, dropoffAddress: b.dropoffAddress, airline: b.airline, flightNumber: b.flightNumber, passengers: b.passengers, luggage: b.luggage, tripType: b.tripType, phone: b.phone, paymentAmount: b.paymentAmount, driverNumber: b.driverNumber, date: b.date, timeSlot: b.timeSlot, customTime: "" });
+    setEditingBooking(b);
+    // Restore flight/fare data if present on the booking
+    if (b.flightStatus) setFlightData({ status: b.flightStatus, scheduled_arrival: b.flightArrival, flight_number: b.flightNumber, airline: b.airline });
+    if (b.fareRoute) setFareData({ found: true, route: b.fareRoute, total: b.paymentAmount });
+    setView("booking");
+  };
+
+  // ── Filtered bookings ──
+  const filteredBookings = useMemo(() => {
+    let result = [...bookings];
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(b =>
+        b.customerName.toLowerCase().includes(q) || b.phone.includes(q) || b.driverNumber.includes(q) || b.date.includes(q) || b.airline.toLowerCase().includes(q) || b.flightNumber.toLowerCase().includes(q)
+      );
+    }
+    if (filters.dateFrom) result = result.filter(b => b.date >= filters.dateFrom);
+    if (filters.dateTo) result = result.filter(b => b.date <= filters.dateTo);
+    if (filters.driverNumber) result = result.filter(b => b.driverNumber === filters.driverNumber);
+    if (filters.tripType) result = result.filter(b => b.tripType === filters.tripType);
+    if (filters.dayType) {
+      result = result.filter(b => {
+        const day = new Date(b.date + "T12:00:00").getDay();
+        return filters.dayType === "weekday" ? (day >= 1 && day <= 5) : (day === 0 || day === 6);
+      });
+    }
+    if (filters.shift) {
+      result = result.filter(b => {
+        const t24 = formatTime24(b.timeSlot);
+        const h = parseInt(t24);
+        if (filters.shift === "morning") return h >= 5 && h < 16;
+        if (filters.shift === "night") return h >= 17 || h < 5;
+        return true;
+      });
+    }
+    return result.sort((a, b) => {
+      if (a.date !== b.date) return a.date.localeCompare(b.date);
+      return (a.timeSlot || "").localeCompare(b.timeSlot || "");
+    });
+  }, [bookings, searchQuery, filters]);
+
+  // Group bookings
+  const groupedBookings = useMemo(() => {
+    const weekday = [], weekend = [];
+    filteredBookings.forEach(b => {
+      const day = new Date(b.date + "T12:00:00").getDay();
+      if (day === 0 || day === 6) weekend.push(b);
+      else weekday.push(b);
+    });
+    return { weekday, weekend };
+  }, [filteredBookings]);
+
+  // Driver availability for selected date
+  const driverAvailability = useMemo(() => {
+    if (!form.date) return {};
+    const result = {};
+    DRIVERS.forEach(d => {
+      result[d.id] = getDriverShift(d, form.date);
+    });
+    return result;
+  }, [form.date]);
+
+  const selectedDriver = DRIVERS.find(d => d.id === form.driverNumber);
+
+  // For each time slot: count of available drivers & whether selected driver can work it
+  const slotInfo = useMemo(() => {
+    if (!form.date) return {};
+    const allSlots = [...AM_SLOTS, ...PM_SLOTS];
+    const info = {};
+    allSlots.forEach(slot => {
+      const availDrivers = DRIVERS.filter(d => {
+        const shift = getDriverShift(d, form.date);
+        if (!shift.available) return false;
+        return isTimeInShift(slot, shift.start, shift.end);
+      });
+      const selectedOk = selectedDriver
+        ? (() => { const sh = getDriverShift(selectedDriver, form.date); return sh.available && isTimeInShift(slot, sh.start, sh.end); })()
+        : null;
+      info[slot] = { count: availDrivers.length, selectedDriverOk: selectedOk, driverIds: availDrivers.map(d => d.id) };
+    });
+    return info;
+  }, [form.date, form.driverNumber, selectedDriver]);
+
+  // For each driver: whether they cover the currently selected time slot
+  // Drivers already booked at the selected date+time (prevents double-booking)
+  const bookedDrivers = useMemo(() => {
+    if (!form.date || !form.timeSlot) return new Set();
+    const booked = new Set();
+    bookings.filter(b => !b.deleted && b.date === form.date && b.timeSlot === form.timeSlot)
+      .forEach(b => { if (b.driverNumber && (!editingBooking || b.id !== editingBooking.id)) booked.add(b.driverNumber); });
+    return booked;
+  }, [bookings, form.date, form.timeSlot, editingBooking]);
+
+  const driverTimeMatch = useMemo(() => {
+    if (!form.date || !form.timeSlot) return {};
+    const result = {};
+    DRIVERS.forEach(d => {
+      const shift = getDriverShift(d, form.date);
+      if (!shift.available) { result[d.id] = { available: false, reason: "day-off" }; return; }
+      const covers = isTimeInShift(form.timeSlot, shift.start, shift.end);
+      result[d.id] = { available: covers, reason: covers ? "ok" : "out-of-shift" };
+    });
+    return result;
+  }, [form.date, form.timeSlot]);
+
+  // ── Auth gate ──
+  if (authStatus === "loading") {
+    return (
+      <div style={{ minHeight: "100vh", background: "#0a0b0f", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: 48, marginBottom: 16 }}>🚖</div>
+          <p style={{ color: "#555", fontSize: 14 }}>Loading…</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (authStatus === "unauthenticated") {
+    return (
+      <LoginPage
+        endpointUrl={syncConfig.endpointUrl}
+        onLogin={(userData) => saveSession(userData)}
+        onSaveEndpoint={(url) => {
+          const newConfig = { ...syncConfig, endpointUrl: url };
+          saveSyncConfig(newConfig);
+          setSyncConfig(newConfig);
+        }}
+      />
+    );
+  }
+
+  // Admin gets the admin dashboard instead of the booking app
+  if (currentUser && currentUser.role === "admin") {
+    return (
+      <AdminDashboard
+        currentUser={currentUser}
+        endpointUrl={syncConfig.endpointUrl}
+        onSignOut={() => clearSession()}
+      />
+    );
+  }
+
+  // Dispatcher: show passphrase gate if not yet unlocked
+  if (deviceBookings === null) {
+    return (
+      <DevicePassphraseGate
+        isFirstTime={isFirstTime}
+        onUnlocked={(passphrase, bookings) => {
+          setDevicePassphrase(passphrase);
+          // Replace the auto-purge bookings with the decrypted + purged set
+          const purged = BackupService.autoPurgeOldBookings(bookings, 730);
+          setBookings(purged);
+          setDeviceBookings(purged);
+        }}
+      />
+    );
+  }
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#0a0b0f", color: "#e8e6e1", fontFamily: "'JetBrains Mono', 'SF Mono', 'Fira Code', monospace" }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Noto+Sans+KR:wght@300;400;500;700&display=swap');
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #111318; }
+        ::-webkit-scrollbar-thumb { background: #2a2d36; border-radius: 3px; }
+        input, select, textarea { font-family: inherit; }
+        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+        @keyframes slideUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes glow { 0%,100% { box-shadow: 0 0 8px rgba(255,58,48,0.3); } 50% { box-shadow: 0 0 20px rgba(255,58,48,0.6); } }
+        .card-enter { animation: slideUp 0.25s ease-out forwards; }
+        .rec-pulse { animation: glow 1.2s ease-in-out infinite; }
+        .booking-card-grid span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        /* Responsive: collapse grids on narrow screens */
+        @media (max-width: 480px) {
+          .resp-grid-2 { grid-template-columns: 1fr !important; }
+          .resp-grid-3 { grid-template-columns: 1fr 1fr !important; }
+          .resp-grid-4 { grid-template-columns: repeat(3, 1fr) !important; }
+        }
+        @media (max-width: 360px) {
+          .resp-grid-3 { grid-template-columns: 1fr !important; }
+          .resp-grid-4 { grid-template-columns: repeat(2, 1fr) !important; }
+        }
+        /* Accessibility: reduced motion */
+        @media (prefers-reduced-motion: reduce) {
+          .card-enter, .rec-pulse { animation: none !important; }
+          * { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+        }
+        /* Accessibility: visible focus indicator */
+        input:focus, select:focus, textarea:focus, button:focus-visible {
+          outline: 2px solid #ff6b35 !important;
+          outline-offset: 2px;
+        }
+      `}</style>
+
+      {/* ── Header ── */}
+      <header style={{ background: "linear-gradient(135deg, #111318 0%, #161820 100%)", borderBottom: "1px solid #1e2028", padding: "12px 20px", position: "sticky", top: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg, #ff3a30, #ff6b35)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>🚖</div>
+          <div>
+            <h1 style={{ fontSize: 16, fontWeight: 700, letterSpacing: "0.05em", color: "#fff", fontFamily: "'JetBrains Mono', monospace" }}>DISPATCH HQ</h1>
+            <p style={{ fontSize: 11, color: "#555", letterSpacing: "0.06em" }}>👤 {session ? session.name : "Dispatcher"}</p>
+          </div>
+        </div>
+        <nav role="navigation" aria-label="Main tabs" style={{ display: "flex", gap: 4, alignItems: "center", overflowX: "auto", WebkitOverflowScrolling: "touch", msOverflowStyle: "none", scrollbarWidth: "none" }}>
+          {syncConfigured && (
+            <span style={{ fontSize: 11, marginRight: 4, color: syncStatus === "syncing" ? "#fc6" : passphrase ? "#4a4" : "#666", display: "flex", alignItems: "center", gap: 3 }}>
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: syncStatus === "syncing" ? "#fc6" : passphrase ? "#4a4" : "#555", display: "inline-block", animation: syncStatus === "syncing" ? "pulse 1s infinite" : "none" }} />
+              {syncStatus === "syncing" ? "SYNCING" : passphrase ? "ENCRYPTED" : "LOCKED"}
+            </span>
+          )}
+          {[["booking","📝 Book"],["dashboard","📊 Dash"],["drivers","🚗 Drivers"],["sync","🔐 Sync"],["backup","💾 Backup"]].map(([v, label]) => (
+            <button key={v} onClick={() => setView(v)} style={{ padding: "10px 14px", borderRadius: 8, border: "none", background: view === v ? "linear-gradient(135deg, #ff3a30, #ff6b35)" : "transparent", color: view === v ? "#fff" : "#777", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", letterSpacing: "0.03em", transition: "all 0.2s" }}>{label}</button>
+          ))}
+          <button onClick={onLogout} title="Sign out" style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #1e2028", background: "transparent", color: "#555", fontSize: 12, cursor: "pointer", fontFamily: "inherit", marginLeft: 4 }}>Sign Out</button>
+        </nav>
+      </header>
+
+      <main role="main" aria-label="Dispatch HQ Application" style={{ maxWidth: 960, margin: "0 auto", padding: "20px 16px" }}>
+
+        {!gdprDismissed && (
+          <div role="alert" style={{ padding: "14px 16px", borderRadius: 12, marginBottom: 16, background: "rgba(59,158,255,0.06)", border: "1px solid #1a2a4a" }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+              <span style={{ fontSize: 18 }}>🔒</span>
+              <div style={{ flex: 1 }}>
+                <p style={{ fontSize: 14, fontWeight: 700, color: "#8bc4ff", marginBottom: 6 }}>Privacy Notice</p>
+                <p style={{ fontSize: 13, color: "#bbb", lineHeight: 1.5, marginBottom: 4 }}>This app stores customer booking data (names, phone numbers, addresses, flight details, payment amounts) on your device. When you use Cloud Backup, data is encrypted before leaving your device.</p>
+                <p style={{ fontSize: 13, color: "#bbb", lineHeight: 1.5, marginBottom: 4 }}>When you use AI Smart Fill, the booking text you type is sent to Anthropic's API for processing. Do not enter sensitive data beyond what is needed for the booking.</p>
+                <p style={{ fontSize: 12, color: "#999", lineHeight: 1.5 }}>Bookings are kept for 2 years for record-keeping, then automatically removed. You can export or delete all data at any time from the Backup tab.</p>
+              </div>
+              <button onClick={dismissGdpr} style={{ padding: "6px 14px", borderRadius: 6, border: "none", background: "#2255aa", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>OK</button>
+            </div>
+          </div>
+        )}
+
+        {/* ══════════════ BOOKING FORM ══════════════ */}
+        {view === "booking" && (<div role="form" aria-label="New booking form">
+          <div className="card-enter">
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+              <h2 style={{ fontSize: 20, fontWeight: 700, color: "#fff" }}>{editingBooking ? "✏️ Edit Booking" : "📝 New Booking"}</h2>
+              {editingBooking && <button onClick={() => { setEditingBooking(null); setForm({...INIT_FORM}); }} style={{ padding: "6px 14px", background: "#2a2d36", border: "none", borderRadius: 6, color: "#999", fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>Cancel Edit</button>}
+            </div>
+
+            {/* Date & Time */}
+            {/* Date & Time */}
+            <div style={{ background: "#12141a", border: "1px solid #1e2028", borderRadius: 14, padding: 18, marginBottom: 14 }}>
+              <div className="resp-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+
+                {/* ── Custom Calendar Picker ── */}
+                <div style={{ position: "relative" }}>
+                  <label style={labelStyle}>📅 Date</label>
+                  {/* Trigger button */}
+                  <button data-picker onClick={() => setShowCal(v => !v)} style={{
+                    ...inputStyle, width: "100%", textAlign: "left", cursor: "pointer",
+                    border: missingFields.includes("date") ? "1.5px solid #ff3a30" : showCal ? "1.5px solid #ff6b35" : inputStyle.border,
+                    boxShadow: showCal ? "0 0 0 1px rgba(255,107,53,0.2)" : missingFields.includes("date") ? "0 0 0 1px rgba(255,58,48,0.2)" : "none",
+                    display: "flex", alignItems: "center", justifyContent: "space-between", fontFamily: "inherit", background: inputStyle.background
+                  }}>
+                    <span style={{ color: form.date ? "#e8e6e1" : "#555" }}>
+                      {form.date ? new Date(form.date + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" }) : "Select date"}
+                    </span>
+                    <span style={{ fontSize: 12, color: "#666" }}>{showCal ? "▲" : "▼"}</span>
+                  </button>
+
+                  {/* Calendar popup */}
+                  {showCal && (() => {
+                    const today = new Date(); today.setHours(0,0,0,0);
+                    const todayStr = today.toISOString().split("T")[0];
+                    const selectedDate = form.date ? new Date(form.date + "T12:00:00") : null;
+                    const viewYear = calViewMonth.year;
+                    const viewMonth = calViewMonth.month; // 0-indexed
+                    const firstDay = new Date(viewYear, viewMonth, 1).getDay();
+                    const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+                    const monthNames = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+                    const cells = [];
+                    for (let i = 0; i < firstDay; i++) cells.push(null);
+                    for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+                    while (cells.length % 7 !== 0) cells.push(null);
+
+                    return (
+                      <div data-picker style={{
+                        position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 200,
+                        background: "#1a1c22", border: "1px solid #2a2d36", borderRadius: 12,
+                        padding: 14, width: 280, boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
+                        opacity: 1
+                      }}>
+                        {/* Month nav */}
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                          <button onClick={() => setCalViewMonth(p => { const d = new Date(p.year, p.month - 1); return { year: d.getFullYear(), month: d.getMonth() }; })} style={{ background: "transparent", border: "none", color: "#aaa", fontSize: 18, cursor: "pointer", padding: "0 6px" }}>‹</button>
+                          <span style={{ fontSize: 14, fontWeight: 700, color: "#fff" }}>{monthNames[viewMonth]} {viewYear}</span>
+                          <button onClick={() => setCalViewMonth(p => { const d = new Date(p.year, p.month + 1); return { year: d.getFullYear(), month: d.getMonth() }; })} style={{ background: "transparent", border: "none", color: "#aaa", fontSize: 18, cursor: "pointer", padding: "0 6px" }}>›</button>
+                        </div>
+
+                        {/* Day headers */}
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 2, marginBottom: 4 }}>
+                          {["S","M","T","W","T","F","S"].map((d,i) => (
+                            <div key={i} style={{ textAlign: "center", fontSize: 11, color: "#555", fontWeight: 700, padding: "2px 0" }}>{d}</div>
+                          ))}
+                        </div>
+
+                        {/* Day cells */}
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 2 }}>
+                          {cells.map((day, i) => {
+                            if (!day) return <div key={i} />;
+                            const dateStr = `${viewYear}-${String(viewMonth+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
+                            const isPast = dateStr < todayStr;
+                            const isToday = dateStr === todayStr;
+                            const isSelected = dateStr === form.date;
+                            return (
+                              <button key={i} onClick={() => { if (!isPast) { setForm(p => ({...p, date: dateStr})); setShowCal(false); } }} style={{
+                                padding: "7px 0", borderRadius: 6, border: "none", fontSize: 13, fontFamily: "inherit",
+                                background: isSelected ? "#ff3a30" : isToday ? "rgba(255,107,53,0.15)" : "transparent",
+                                color: isPast ? "#2a2d36" : isSelected ? "#fff" : isToday ? "#ff6b35" : "#ccc",
+                                cursor: isPast ? "not-allowed" : "pointer",
+                                fontWeight: isSelected || isToday ? 700 : 400,
+                                opacity: isPast ? 0.4 : 1
+                              }}>{day}</button>
+                            );
+                          })}
+                        </div>
+
+                        {/* Today / Tomorrow shortcuts */}
+                        <div style={{ display: "flex", gap: 6, marginTop: 10, borderTop: "1px solid #222", paddingTop: 10 }}>
+                          {["Today","Tomorrow"].map((label, offset) => {
+                            const d = new Date(); d.setDate(d.getDate() + offset);
+                            const ds = d.toISOString().split("T")[0];
+                            return (
+                              <button key={label} onClick={() => { setForm(p => ({...p, date: ds})); setShowCal(false); }} style={{
+                                flex: 1, padding: "6px 0", borderRadius: 6, border: "1px solid #2a2d36",
+                                background: form.date === ds ? "rgba(255,58,48,0.1)" : "transparent",
+                                color: form.date === ds ? "#ff6b35" : "#888", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 600
+                              }}>{label}</button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* ── Quick Time Picker ── */}
+                <div style={{ position: "relative" }}>
+                  <label style={{...labelStyle, color: missingFields.includes("timeSlot") ? "#f88" : labelStyle.color}}>
+                    ⏰ Time{missingFields.includes("timeSlot") && <span style={{ color: "#f88" }}> *</span>}
+                  </label>
+                  <button data-picker onClick={() => setShowTimePicker(v => !v)} style={{
+                    ...inputStyle, width: "100%", textAlign: "left", cursor: "pointer",
+                    border: missingFields.includes("timeSlot") ? "1.5px solid #ff3a30" : showTimePicker ? "1.5px solid #ff6b35" : inputStyle.border,
+                    boxShadow: showTimePicker ? "0 0 0 1px rgba(255,107,53,0.2)" : missingFields.includes("timeSlot") ? "0 0 0 1px rgba(255,58,48,0.2)" : "none",
+                    display: "flex", alignItems: "center", justifyContent: "space-between", fontFamily: "inherit", background: inputStyle.background
+                  }}>
+                    <span style={{ color: form.timeSlot ? "#e8e6e1" : "#555" }}>{form.timeSlot || "Select time"}</span>
+                    <span style={{ fontSize: 12, color: "#666" }}>{showTimePicker ? "▲" : "▼"}</span>
+                  </button>
+
+                  {showTimePicker && (() => {
+                    const QUICK_TIMES = [
+                      "12:00 AM","1:00 AM","2:00 AM","3:00 AM","4:00 AM","5:00 AM","5:30 AM",
+                      "6:00 AM","6:30 AM","7:00 AM","7:30 AM","8:00 AM","8:30 AM","9:00 AM","9:30 AM",
+                      "10:00 AM","10:30 AM","11:00 AM","11:30 AM",
+                      "12:00 PM","12:30 PM","1:00 PM","1:30 PM","2:00 PM","2:30 PM",
+                      "3:00 PM","3:30 PM","4:00 PM","4:30 PM","5:00 PM","5:30 PM",
+                      "6:00 PM","6:30 PM","7:00 PM","7:30 PM","8:00 PM","8:30 PM",
+                      "9:00 PM","9:30 PM","10:00 PM","11:00 PM"
+                    ];
+                    return (
+                      <div data-picker style={{
+                        position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 200,
+                        background: "#1a1c22", border: "1px solid #2a2d36", borderRadius: 12,
+                        boxShadow: "0 8px 32px rgba(0,0,0,0.6)", width: 200,
+                        maxHeight: 260, overflowY: "auto"
+                      }}>
+                        {QUICK_TIMES.map(t => {
+                          const isAM = t.includes("AM");
+                          const isSelected = form.timeSlot === t;
+                          return (
+                            <button key={t} onClick={() => {
+                              const [time, period] = t.split(" ");
+                              const [h, m] = time.split(":").map(Number);
+                              let h24 = period === "PM" && h !== 12 ? h + 12 : period === "AM" && h === 12 ? 0 : h;
+                              const customTime = `${String(h24).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
+                              setForm(p => ({...p, timeSlot: t, customTime}));
+                              setShowTimePicker(false);
+                            }} style={{
+                              width: "100%", padding: "9px 16px", border: "none", textAlign: "left",
+                              background: isSelected ? "rgba(255,58,48,0.15)" : "transparent",
+                              color: isSelected ? "#ff6b35" : isAM ? "#8bc4ff" : "#ffa366",
+                              fontSize: 14, cursor: "pointer", fontFamily: "inherit",
+                              fontWeight: isSelected ? 700 : 400,
+                              borderBottom: t.endsWith("AM") && QUICK_TIMES[QUICK_TIMES.indexOf(t)+1]?.includes("PM") ? "1px solid #222" : "none"
+                            }}>{t}</button>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+                </div>
+
+              </div>
+            </div>
+
+            {/* Customer Info */}
+            <div style={{ background: "#12141a", border: "1px solid #1e2028", borderRadius: 14, padding: 18, marginBottom: 14 }}>
+              <p style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", marginBottom: 14, letterSpacing: "0.1em" }}>CUSTOMER INFO</p>
+              <div className="resp-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <Field label="Customer Name" value={form.customerName} onChange={v => setForm(p=>({...p,customerName:v}))} full highlight={missingFields.includes("customerName")} />
+                <Field label="Phone Number" value={form.phone} onChange={v => setForm(p=>({...p,phone:v}))} type="tel" highlight={missingFields.includes("phone")} />
+                <AddressField label="Pickup Address" value={form.pickupAddress} onChange={v => { const norm = normalizeLocation(v); const doNorm = normalizeLocation(form.dropoffAddress); const airport = ["JFK","LGA","EWR"].includes(norm) || ["JFK","LGA","EWR"].includes(doNorm); setForm(p=>({...p,pickupAddress:v,...(!airport && {airline:"",flightNumber:""})})); }} highlight={missingFields.includes("pickupAddress")} mapsReady={mapsReady} speechLang={speechLang} />
+                <AddressField label="Dropoff Address" value={form.dropoffAddress} onChange={v => { const norm = normalizeLocation(v); const puNorm = normalizeLocation(form.pickupAddress); const airport = ["JFK","LGA","EWR"].includes(norm) || ["JFK","LGA","EWR"].includes(puNorm); setForm(p=>({...p,dropoffAddress:v,...(!airport && {airline:"",flightNumber:""})})); }} highlight={missingFields.includes("dropoffAddress")} mapsReady={mapsReady} speechLang={speechLang} />
+                {/* Airline & Flight — only required/active for airport trips */}
+                <div>
+                  <label style={{...labelStyle, color: !isAirportTrip ? "#3a3d46" : missingFields.includes("airline") ? "#f88" : labelStyle.color}}>
+                    Airline{isAirportTrip && <span style={{ color: "#f88" }}> *</span>}
+                    {!isAirportTrip && <span style={{ color: "#3a3d46", fontWeight: 400, marginLeft: 6 }}>(airport only)</span>}
+                  </label>
+                  <input
+                    type="text" value={form.airline}
+                    onChange={e => { if (isAirportTrip) setForm(p=>({...p,airline:e.target.value})); }}
+                    disabled={!isAirportTrip}
+                    placeholder={isAirportTrip ? "e.g. Korean Air" : "—"}
+                    style={{
+                      ...inputStyle,
+                      opacity: isAirportTrip ? 1 : 0.25,
+                      cursor: isAirportTrip ? "text" : "not-allowed",
+                      border: isAirportTrip && missingFields.includes("airline") ? "1.5px solid #ff3a30" : inputStyle.border,
+                      boxShadow: isAirportTrip && missingFields.includes("airline") ? "0 0 0 1px rgba(255,58,48,0.2)" : "none",
+                    }}
+                  />
+                </div>
+                <div>
+                  <label style={{...labelStyle, color: !isAirportTrip ? "#3a3d46" : missingFields.includes("flightNumber") ? "#f88" : labelStyle.color}}>
+                    Flight #{isAirportTrip && <span style={{ color: "#f88" }}> *</span>}
+                    {!isAirportTrip && <span style={{ color: "#3a3d46", fontWeight: 400, marginLeft: 6 }}>(airport only)</span>}
+                  </label>
+                  <input
+                    type="text" value={form.flightNumber}
+                    onChange={e => { if (isAirportTrip) setForm(p=>({...p,flightNumber:e.target.value.toUpperCase()})); }} maxLength={10}
+                    disabled={!isAirportTrip}
+                    placeholder={isAirportTrip ? "e.g. KE081" : "—"}
+                    style={{
+                      ...inputStyle,
+                      opacity: isAirportTrip ? 1 : 0.25,
+                      cursor: isAirportTrip ? "text" : "not-allowed",
+                      border: isAirportTrip && missingFields.includes("flightNumber") ? "1.5px solid #ff3a30" : inputStyle.border,
+                      boxShadow: isAirportTrip && missingFields.includes("flightNumber") ? "0 0 0 1px rgba(255,58,48,0.2)" : "none",
+                    }}
+                  />
+                </div>
+                <Field label="Passengers" value={form.passengers} onChange={v => setForm(p=>({...p,passengers:sanitizeInteger(v, 1, 99)}))} type="number" />
+                <Field label="Luggage" value={form.luggage} onChange={v => setForm(p=>({...p,luggage:sanitizeInteger(v, 0, 99)}))} type="number" />
+              </div>
+              <div className="resp-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+                <div>
+                  <label style={labelStyle}>Trip Type</label>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {["one-way","round-trip"].map(t => (
+                      <button key={t} onClick={() => setForm(p=>({...p,tripType:t}))} style={{ flex: 1, padding: "10px", borderRadius: 8, border: form.tripType === t ? "1px solid #ff3a30" : "1px solid #1e2028", background: form.tripType === t ? "rgba(255,58,48,0.1)" : "#0d0e12", color: form.tripType === t ? "#ff6b35" : "#666", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", textTransform: "capitalize" }}>{t === "one-way" ? "One-Way →" : "Round-Trip ⇄"}</button>
+                    ))}
+                  </div>
+                </div>
+                <Field label="Payment ($)" value={form.paymentAmount} onChange={v => { setForm(p=>({...p,paymentAmount:v})); setPaymentManuallyEdited(true); }} type="number" highlight={missingFields.includes("paymentAmount")} />
+              </div>
+
+              {/* Instant fare indicator */}
+              {manualFare && (
+                <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, background: manualFare.found ? "rgba(80,200,80,0.06)" : "rgba(255,200,80,0.06)", border: `1px solid ${manualFare.found ? "#1a3a1a" : "#3a3a1a"}`, display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 14 }}>{manualFare.found ? "💰" : "❓"}</span>
+                  <span style={{ fontSize: 13, color: manualFare.found ? "#8f8" : "#fc6" }}>{manualFare.message}</span>
+                  {manualFare.found && form.tripType === "round-trip" && (
+                    <span style={{ fontSize: 12, color: "#aaa", marginLeft: "auto" }}>×2 round-trip</span>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* ── Flight Status & AI-Powered Fare ── */}
+            <div style={{ background: "linear-gradient(135deg, #0f1118, #131620)", border: "1px solid #1a1d28", borderRadius: 14, padding: 18, marginBottom: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+                <p style={{ fontSize: 14, fontWeight: 700, color: "#3b9eff", letterSpacing: "0.1em" }}>✈ FLIGHT STATUS & FARE ASSIST</p>
+                {isStandaloneMode() && !aiLoading && !aiError && (
+                <div style={{ fontSize: 12, color: "#bbb", background: "rgba(255,200,80,0.06)", padding: "6px 10px", borderRadius: 6, border: "1px solid #3a3a1a" }}>
+                  <span>Website mode — AI flight lookup unavailable. </span>
+                  <a href={form.flightNumber ? `https://flightaware.com/live/flight/${form.flightNumber.trim()}` : "https://flightaware.com"} target="_blank" rel="noopener noreferrer" style={{ color: "#ff6b35", fontWeight: 700, textDecoration: "none" }}>Check on FlightAware ↗</a>
+                </div>
+              )}
+              {aiLoading && <span style={{ fontSize: 12, color: "#fc6", animation: "pulse 1s infinite" }}>⏳ Searching... ({aiTimer}s)</span>}
+              </div>
+
+              {/* Action Buttons */}
+              <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+                <button
+                  onClick={lookupFlightOnly}
+                  disabled={aiLoading || (!form.flightNumber && !form.airline) || isStandaloneMode()}
+                  style={{
+                    flex: 1, padding: "10px 8px", borderRadius: 8, border: "none", fontSize: 14, fontWeight: 700,
+                    background: (!form.flightNumber && !form.airline) ? "#161820" : "linear-gradient(135deg, #1a3a6a, #2255aa)",
+                    color: (!form.flightNumber && !form.airline) ? "#333" : "#fff",
+                    cursor: (!form.flightNumber && !form.airline || aiLoading) ? "default" : "pointer", fontFamily: "inherit",
+                    opacity: aiLoading ? 0.5 : 1
+                  }}
+                >
+                  ✈ Check Flight
+                </button>
+                <button
+                  onClick={runAIAssistHandler}
+                  disabled={aiLoading || isStandaloneMode() || ((!form.flightNumber && !form.airline) && (!form.pickupAddress || !form.dropoffAddress))}
+                  style={{
+                    flex: 2, padding: "10px 8px", borderRadius: 8, border: "none", fontSize: 14, fontWeight: 700,
+                    background: aiLoading ? "#161820" : "linear-gradient(135deg, #2255aa, #3b9eff)",
+                    color: "#fff",
+                    cursor: aiLoading ? "default" : "pointer", fontFamily: "inherit",
+                    boxShadow: aiLoading ? "none" : "0 2px 12px rgba(59,158,255,0.2)",
+                    opacity: aiLoading ? 0.5 : 1
+                  }}
+                >
+                  {aiLoading ? `⏳ Searching... (${aiTimer}s)` : "✈ Check Flight + Fare"}
+                </button>
+              </div>
+
+              {/* AI Summary */}
+              {aiSummary && (
+                <div style={{ padding: "8px 12px", background: "rgba(59,158,255,0.06)", border: "1px solid #1a2a4a", borderRadius: 8, marginBottom: 12 }}>
+                  <p style={{ fontSize: 14, color: "#8bc4ff" }}>{aiSummary}</p>
+                </div>
+              )}
+
+              {/* Error */}
+              {aiError && (
+                <div style={{ padding: "8px 12px", background: "rgba(255,58,48,0.06)", border: "1px solid #3a1a1a", borderRadius: 8, marginBottom: 12 }}>
+                  <p style={{ fontSize: 13, color: "#f88" }}>⚠ {aiError}</p>
+                </div>
+              )}
+
+              {/* Flight Data Card */}
+              {flightData && !flightData.error && flightData.status !== "error" && flightData.status !== "unavailable" && (
+                <div style={{ background: "#0d0e14", border: "1px solid #1a2a4a", borderRadius: 10, padding: 14, marginBottom: 10 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                    <span style={{ fontSize: 18 }}>✈</span>
+                    <div>
+                      <p style={{ fontSize: 16, fontWeight: 700, color: "#fff" }}>
+                        {flightData.flight_number || form.flightNumber || "Flight"}
+                        {flightData.airline && <span style={{ fontWeight: 400, color: "#bbb", fontSize: 14 }}> · {flightData.airline}</span>}
+                      </p>
+                    </div>
+                    {/* Status badge */}
+                    <span style={{
+                      marginLeft: "auto", padding: "3px 10px", borderRadius: 6, fontSize: 13, fontWeight: 700,
+                      background: flightData.status === "on-time" || flightData.status === "landed" ? "rgba(80,200,80,0.15)" :
+                        flightData.status === "delayed" ? "rgba(255,200,80,0.15)" :
+                        flightData.status === "cancelled" ? "rgba(255,58,48,0.15)" : "rgba(150,150,150,0.1)",
+                      color: flightData.status === "on-time" || flightData.status === "landed" ? "#8f8" :
+                        flightData.status === "delayed" ? "#fc6" :
+                        flightData.status === "cancelled" ? "#f66" : "#888",
+                      border: `1px solid ${flightData.status === "on-time" || flightData.status === "landed" ? "#1a3a1a" :
+                        flightData.status === "delayed" ? "#3a3a1a" :
+                        flightData.status === "cancelled" ? "#3a1a1a" : "#222"}`,
+                      textTransform: "uppercase"
+                    }}>
+                      {flightData.status || "Unknown"}
+                      {Number(flightData.delay_minutes) > 0 && ` +${flightData.delay_minutes}m`}
+                    </span>
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 8, alignItems: "center", marginBottom: 8 }}>
+                    <div style={{ textAlign: "center" }}>
+                      <p style={{ fontSize: 18, fontWeight: 700, color: "#3b9eff" }}>{flightData.origin_code || "---"}</p>
+                      <p style={{ fontSize: 12, color: "#aaa" }}>{flightData.origin_city || "Origin"}</p>
+                      {flightData.scheduled_departure && <p style={{ fontSize: 13, color: "#bbb", marginTop: 2 }}>
+                        {flightData.actual_departure ? <><s style={{color:"#555"}}>{flightData.scheduled_departure}</s> <span style={{color:"#fc6"}}>{flightData.actual_departure}</span></> : flightData.scheduled_departure}
+                      </p>}
+                    </div>
+                    <div style={{ fontSize: 16, color: "#777" }}>→</div>
+                    <div style={{ textAlign: "center" }}>
+                      <p style={{ fontSize: 18, fontWeight: 700, color: "#ff6b35" }}>{flightData.destination_code || "---"}</p>
+                      <p style={{ fontSize: 12, color: "#aaa" }}>{flightData.destination_city || "Destination"}</p>
+                      {flightData.scheduled_arrival && <p style={{ fontSize: 13, color: "#bbb", marginTop: 2 }}>
+                        {flightData.actual_arrival && flightData.actual_arrival !== flightData.scheduled_arrival ? <><s style={{color:"#555"}}>{flightData.scheduled_arrival}</s> <span style={{color:"#fc6"}}>{flightData.actual_arrival}</span></> : flightData.scheduled_arrival}
+                      </p>}
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
+                    {flightData.terminal && <span style={{ fontSize: 12, color: "#aaa", background: "#161820", padding: "2px 8px", borderRadius: 4 }}>Terminal {flightData.terminal}</span>}
+                    {flightData.gate && <span style={{ fontSize: 12, color: "#aaa", background: "#161820", padding: "2px 8px", borderRadius: 4 }}>Gate {flightData.gate}</span>}
+                    {flightData.aircraft_type && <span style={{ fontSize: 12, color: "#aaa", background: "#161820", padding: "2px 8px", borderRadius: 4 }}>{flightData.aircraft_type}</span>}
+                  </div>
+                </div>
+              )}
+
+              {/* Fare Data Card */}
+              {fareData && fareData.found && (
+                <div style={{ background: "#0d0e14", border: "1px solid #1a3a1a", borderRadius: 10, padding: 14 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 16 }}>💰</span>
+                      <p style={{ fontSize: 14, fontWeight: 600, color: "#fff" }}>{fareData.route || "Fare"}</p>
+                    </div>
+                    <p style={{ fontSize: 22, fontWeight: 800, color: "#4ade80" }}>${fareData.total}</p>
+                  </div>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", fontSize: 13 }}>
+                    <span style={{ color: "#bbb" }}>Base: <span style={{color:"#bbb"}}>${fareData.base_fare}</span></span>
+                    {fareData.toll > 0 && <span style={{ color: "#bbb" }}>Toll: <span style={{color:"#fc6"}}>${fareData.toll}</span></span>}
+                    {fareData.surcharges && fareData.surcharges.length > 0 && fareData.surcharges.map((s, i) => (
+                      <span key={i} style={{ color: "#a86c32" }}>{s}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {!flightData && !fareData && !aiLoading && !aiError && (
+                <p style={{ fontSize: 13, color: "#777", textAlign: "center", padding: 8 }}>
+                  Enter a flight # or pickup/dropoff above, then press a lookup button.
+                  Both run in parallel when available.
+                </p>
+              )}
+            </div>
+
+            {/* Fleet Assignment — driver picker */}
+            <div style={{ background: "#12141a", border: "1px solid #1e2028", borderRadius: 14, padding: 18, marginBottom: 14 }}>
+              <p style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", marginBottom: 4, letterSpacing: "0.08em" }}>🚖 Fleet Assignment</p>
+
+              {/* Active filters display */}
+              {(() => {
+                const pickup  = normalizeLocation(form.pickupAddress);
+                const dropoff = normalizeLocation(form.dropoffAddress);
+                const needsPickup  = ["JFK","LGA","EWR"].includes(pickup);
+                const needsDropoff = ["JFK","LGA","EWR"].includes(dropoff);
+                const filters = [];
+                if (form.date)    filters.push(`📅 ${new Date(form.date + "T12:00:00").toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"})}`);
+                if (form.timeSlot) filters.push(`⏰ ${form.timeSlot}`);
+                if (needsPickup)  filters.push(`✈ Airport pickup (${pickup})`);
+                if (needsDropoff) filters.push(`✈ Airport dropoff (${dropoff})`);
+                return filters.length > 0 ? (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 12 }}>
+                    {filters.map((f,i) => (
+                      <span key={i} style={{ fontSize: 12, padding: "3px 10px", borderRadius: 20, background: "rgba(255,107,53,0.08)", border: "1px solid #3a2010", color: "#ff8c35" }}>{f}</span>
+                    ))}
+                  </div>
+                ) : <p style={{ fontSize: 12, color: "#555", marginBottom: 12 }}>Fill in date, time, and addresses above to filter drivers automatically</p>;
+              })()}
+
+              <div className="resp-grid-3" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
+                {DRIVERS.map(driver => {
+                  const pickup  = normalizeLocation(form.pickupAddress);
+                  const dropoff = normalizeLocation(form.dropoffAddress);
+                  const needsPickup  = ["JFK","LGA","EWR"].includes(pickup);
+                  const needsDropoff = ["JFK","LGA","EWR"].includes(dropoff);
+
+                  // Reason for each grey-out (evaluated independently)
+                  const shift       = form.date ? getDriverShift(driver, form.date) : { available: true };
+                  const offDate     = !shift.available;
+                  const offTime     = !offDate && form.timeSlot
+                                        ? (driverTimeMatch[driver.id] && !driverTimeMatch[driver.id].available)
+                                        : false;
+                  const noAirportPU = needsPickup  && !driver.airportPickup;
+                  const noAirportDO = needsDropoff && !driver.airportDropoff;
+
+                  const alreadyBooked = bookedDrivers.has(driver.id);
+      const isUnavailable = offDate || offTime || noAirportPU || noAirportDO || alreadyBooked;
+                  const isSelected    = form.driverNumber === driver.id;
+
+                  // Reason label shown inside the button
+                  const fmt12 = (t) => {
+                    if (!t) return "";
+                    let [h, m] = t.split(":").map(Number);
+                    const p = h >= 12 ? "PM" : "AM";
+                    if (h === 0) h = 12; else if (h > 12) h -= 12;
+                    return `${h}${m ? ":"+String(m).padStart(2,"0") : ""}${p}`;
+                  };
+                  const reasonLabel = offDate     ? "Off today"
+                    : noAirportPU && noAirportDO  ? "No airport"
+                    : noAirportPU                 ? `No PU at ${pickup}`
+                    : noAirportDO                 ? `No DO at ${dropoff}`
+                    : offTime                     ? "Off shift"
+                    : shift.start                 ? `${fmt12(shift.start)}–${fmt12(shift.end)}`
+                    : "On duty";
+
+                  // Border/bg colour by state
+                  const borderColor = isSelected    ? "#ff3a30"
+                    : isUnavailable                 ? "#1a1114"
+                    : "1e2028";
+                  const bgColor     = isSelected    ? "rgba(255,58,48,0.12)"
+                    : isUnavailable                 ? "#09090c"
+                    : "#0d0e12";
+                  const textColor   = isSelected    ? "#ff6b35"
+                    : isUnavailable                 ? "#333"
+                    : "#ccc";
+                  const subColor    = isSelected    ? "#ff8c35"
+                    : offDate || noAirportPU || noAirportDO ? "#3a1a1a"
+                    : offTime                       ? "#5a3a1a"
+                    : "#4a6a4a";
+
+                  return (
+                    <button key={driver.id}
+                      onClick={() => { if (!isUnavailable) setForm(p => ({...p, driverNumber: driver.id})); }}
+                      title={isUnavailable ? reasonLabel : `Driver #${driver.id} — ${reasonLabel}`}
+                      style={{
+                        padding: "10px 6px", borderRadius: 8, textAlign: "center",
+                        border: isSelected ? `2px solid ${borderColor}` : `1px solid ${borderColor === "1e2028" ? "#1e2028" : borderColor}`,
+                        background: bgColor, color: textColor,
+                        cursor: isUnavailable ? "not-allowed" : "pointer",
+                        fontFamily: "inherit", fontWeight: isSelected ? 700 : 400,
+                        opacity: isUnavailable ? 0.32 : 1,
+                        transition: "all 0.15s ease"
+                      }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: "0.02em" }}>
+                        Driver #{driver.id}
+                      </div>
+                      <div style={{ fontSize: 11, marginTop: 3, color: subColor, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {reasonLabel}
+                      </div>
+                      {/* Airport capability badges */}
+                      {!isUnavailable && (
+                        <div style={{ display: "flex", justifyContent: "center", gap: 3, marginTop: 4 }}>
+                          {driver.airportPickup  && <span style={{ fontSize: 9, padding: "1px 4px", borderRadius: 3, background: "rgba(59,158,255,0.1)", color: "#3b9eff", border: "1px solid #1a2a4a" }}>PU</span>}
+                          {driver.airportDropoff && <span style={{ fontSize: 9, padding: "1px 4px", borderRadius: 3, background: "rgba(59,158,255,0.1)", color: "#3b9eff", border: "1px solid #1a2a4a" }}>DO</span>}
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Legend */}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 12 }}>
+                <span style={{ fontSize: 11, color: "#555" }}><span style={{ color: "#ccc" }}>■</span> Available</span>
+                <span style={{ fontSize: 11, color: "#555" }}><span style={{ color: "#333" }}>■</span> Off today / shift</span>
+                <span style={{ fontSize: 11, color: "#555" }}><span style={{ color: "#3b9eff" }}>PU</span> Airport pickup &nbsp;<span style={{ color: "#3b9eff" }}>DO</span> Airport dropoff</span>
+              </div>
+
+              {/* Selected driver summary */}
+              {form.driverNumber && (() => {
+                const d = DRIVERS.find(x => x.id === form.driverNumber);
+                const timeMismatch = form.timeSlot && driverTimeMatch[form.driverNumber] && !driverTimeMatch[form.driverNumber].available;
+                const pickup  = normalizeLocation(form.pickupAddress);
+                const dropoff = normalizeLocation(form.dropoffAddress);
+                const airportWarning = (["JFK","LGA","EWR"].includes(pickup) && !d.airportPickup)
+                                    || (["JFK","LGA","EWR"].includes(dropoff) && !d.airportDropoff);
+                const hasWarning = timeMismatch || airportWarning;
+                return (
+                  <div style={{ marginTop: 10, padding: "10px 14px", background: hasWarning ? "rgba(255,58,48,0.08)" : "rgba(80,200,80,0.04)", border: `1px solid ${hasWarning ? "#3a1a1a" : "#1a3a1a"}`, borderRadius: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <span style={{ fontSize: 20 }}>{hasWarning ? "⚠️" : "✅"}</span>
+                      <div style={{ flex: 1 }}>
+                        <span style={{ fontSize: 14, fontWeight: 700, color: hasWarning ? "#f88" : "#6c6" }}>Driver #{form.driverNumber}</span>
+                        {d && d.notes && <span style={{ fontSize: 12, color: "#888", marginLeft: 8 }}>{d.notes}</span>}
+                        {timeMismatch && (
+                          <p style={{ fontSize: 12, color: "#f88", marginTop: 2 }}>
+                            ⏰ Unavailable at {form.timeSlot} — {driverTimeMatch[form.driverNumber].reason === "day-off" ? "off this day" : "outside shift hours"}
+                          </p>
+                        )}
+                        {["JFK","LGA","EWR"].includes(pickup) && !d.airportPickup && (
+                          <p style={{ fontSize: 12, color: "#f88", marginTop: 2 }}>✈ Does not do airport pickups ({pickup})</p>
+                        )}
+                        {["JFK","LGA","EWR"].includes(dropoff) && !d.airportDropoff && (
+                          <p style={{ fontSize: 12, color: "#f88", marginTop: 2 }}>✈ Does not do airport dropoffs ({dropoff})</p>
+                        )}
+                      </div>
+                      <button onClick={() => setForm(p => ({...p, driverNumber: ""}))} style={{ background: "transparent", border: "none", color: "#666", fontSize: 18, cursor: "pointer", padding: "0 4px", flexShrink: 0 }}>✕</button>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Form validation error / warning */}
+            {formError && (() => {
+              const isWarning = formError.startsWith("__OK__:");
+              const isRequired = formError.startsWith("__FIELDS__:");
+              let requiredList = [], optionalList = [];
+              try {
+                if (isRequired) {
+                  const parts = formError.slice(11).split("|");
+                  requiredList = JSON.parse(parts[0] || "[]");
+                  optionalList = JSON.parse(parts[1] || "[]");
+                } else if (isWarning) {
+                  optionalList = JSON.parse(formError.slice(6));
+                }
+              } catch {}
+              return (
+                <div role="alert" aria-live="assertive" style={{ padding: "14px 16px", borderRadius: 12, marginBottom: 14, background: isWarning ? "rgba(255,200,80,0.06)" : "rgba(255,58,48,0.06)", border: `1px solid ${isWarning ? "#3a3a1a" : "#3a1a1a"}` }}>
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: requiredList.length + optionalList.length > 0 ? 10 : 0 }}>
+                    <span style={{ fontSize: 20, flexShrink: 0 }}>{isWarning ? "💡" : "⚠️"}</span>
+                    <div style={{ flex: 1 }}>
+                      <p style={{ fontSize: 15, fontWeight: 700, color: isWarning ? "#fc6" : "#f88" }}>
+                        {isWarning ? "Optional fields empty — tap Confirm again to submit anyway" : `${requiredList.length} required field${requiredList.length !== 1 ? "s" : ""} missing`}
+                      </p>
+                    </div>
+                    <button onClick={() => { setFormError(""); setMissingFields([]); }} style={{ background: "transparent", border: "none", color: "#aaa", fontSize: 16, cursor: "pointer", flexShrink: 0 }}>✕</button>
+                  </div>
+                  {requiredList.length > 0 && (
+                    <div style={{ marginBottom: 8 }}>
+                      <p style={{ fontSize: 12, color: "#f88", fontWeight: 600, marginBottom: 6 }}>Required:</p>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {requiredList.map(f => (
+                          <span key={f} style={{ padding: "4px 10px", borderRadius: 6, background: "rgba(255,58,48,0.12)", border: "1px solid #3a1a1a", color: "#f88", fontSize: 13, fontWeight: 600 }}>✗ {f}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {optionalList.length > 0 && (
+                    <div>
+                      <p style={{ fontSize: 12, color: "#fc6", fontWeight: 600, marginBottom: 6 }}>{isRequired ? "Also empty (optional):" : "Empty fields:"}</p>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {optionalList.map(f => (
+                          <span key={f} style={{ padding: "4px 10px", borderRadius: 6, background: "rgba(255,200,80,0.08)", border: "1px solid #3a3a1a", color: "#fc6", fontSize: 13 }}>○ {f}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {isRequired && <p style={{ fontSize: 13, color: "#bbb", marginTop: 8 }}>Fill in the red-highlighted fields above and try again.</p>}
+                </div>
+              );
+            })()}
+
+            <button onClick={handleSubmit} disabled={isSubmitting} aria-label={isSubmitting ? "Saving booking" : editingBooking ? "Update booking" : "Confirm booking"} style={{ width: "100%", padding: 16, borderRadius: 12, border: "none", background: isSubmitting ? "#2a2d36" : "linear-gradient(135deg, #ff3a30, #ff6b35)", color: "#fff", fontSize: 16, fontWeight: 700, cursor: isSubmitting ? "not-allowed" : "pointer", fontFamily: "inherit", letterSpacing: "0.06em", boxShadow: isSubmitting ? "none" : "0 4px 20px rgba(255,58,48,0.3)", opacity: isSubmitting ? 0.6 : 1, transition: "all 0.2s" }}>
+              {isSubmitting ? "⏳ SAVING..." : editingBooking ? "UPDATE BOOKING ✓" : "CONFIRM BOOKING ✓"}
+            </button>
+          </div></div>
+        )}
+
+        {/* ══════════════ CONFIRMATION MODAL ══════════════ */}
+        {showConfirm && (
+          <div role="dialog" aria-label="Booking confirmed"
+            onClick={() => setShowConfirm(null)}
+            style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 200,
+              display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
+              backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)" }}>
+
+            {/* ── Ticket card ── */}
+            <div onClick={e => e.stopPropagation()} style={{
+              width: "100%", maxWidth: 400, position: "relative",
+              animation: "confirmSlideUp 0.35s cubic-bezier(0.34,1.56,0.64,1) forwards"
+            }}>
+              <style>{`
+                @keyframes confirmSlideUp {
+                  from { opacity:0; transform:translateY(24px) scale(0.97); }
+                  to   { opacity:1; transform:translateY(0) scale(1); }
+                }
+                @keyframes confirmFadeRow {
+                  from { opacity:0; transform:translateX(-8px); }
+                  to   { opacity:1; transform:translateX(0); }
+                }
+                .confirm-row { animation: confirmFadeRow 0.3s ease forwards; opacity:0; }
+              `}</style>
+
+              {/* ── Header stub (top of ticket) ── */}
+              <div style={{
+                background: "linear-gradient(135deg, #1a1008 0%, #2a1d0a 50%, #1a1008 100%)",
+                border: "1px solid #a07830",
+                borderBottom: "none",
+                borderRadius: "18px 18px 0 0",
+                padding: "22px 24px 20px",
+                position: "relative",
+                overflow: "hidden"
+              }}>
+                {/* Gold shimmer overlay */}
+                <div style={{ position:"absolute", inset:0, background:"linear-gradient(105deg, transparent 30%, rgba(200,160,60,0.06) 50%, transparent 70%)", pointerEvents:"none" }} />
+
+                <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between" }}>
+                  <div>
+                    <p style={{ fontSize:10, fontWeight:700, color:"#a07830", letterSpacing:"0.2em", margin:"0 0 4px", textTransform:"uppercase" }}>Dispatch HQ · NYC</p>
+                    <p style={{ fontSize:26, fontWeight:800, color:"#f0c060", margin:"0 0 2px", fontFamily:"Georgia, 'Times New Roman', serif", letterSpacing:"-0.02em" }}>
+                      Confirmed
+                    </p>
+                    <p style={{ fontSize:12, color:"#7a5a20", margin:0 }}>예약이 완료되었습니다</p>
+                  </div>
+                  {/* Reference number */}
+                  <div style={{ textAlign:"right" }}>
+                    <p style={{ fontSize:10, color:"#7a5a20", margin:"0 0 2px", letterSpacing:"0.15em" }}>REF</p>
+                    <p style={{ fontSize:20, fontWeight:800, color:"#f0c060", margin:0, fontFamily:"'Courier New', monospace", letterSpacing:"0.08em" }}>
+                      #{showConfirm.id ? showConfirm.id.slice(-6).toUpperCase() : "------"}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Driver badge */}
+                <div style={{ display:"inline-flex", alignItems:"center", gap:8, marginTop:14,
+                  background:"rgba(240,192,96,0.1)", border:"1px solid rgba(160,120,48,0.4)",
+                  borderRadius:8, padding:"6px 12px" }}>
+                  <span style={{ fontSize:16 }}>🚖</span>
+                  <span style={{ fontSize:13, fontWeight:700, color:"#f0c060" }}>
+                    Driver #{showConfirm.driverNumber || "—"}
+                  </span>
+                </div>
+              </div>
+
+              {/* ── Perforated edge ── */}
+              <div style={{ position:"relative", height:16, overflow:"hidden",
+                background:"linear-gradient(135deg, #1a1008, #2a1d0a)",
+                borderLeft:"1px solid #a07830", borderRight:"1px solid #a07830" }}>
+                {/* Left notch */}
+                <div style={{ position:"absolute", left:-10, top:"50%", transform:"translateY(-50%)",
+                  width:20, height:20, borderRadius:"50%", background:"rgba(0,0,0,0.85)" }} />
+                {/* Dotted perforation */}
+                <div style={{ position:"absolute", left:16, right:16, top:"50%", transform:"translateY(-50%)",
+                  borderTop:"2px dashed rgba(160,120,48,0.3)" }} />
+                {/* Right notch */}
+                <div style={{ position:"absolute", right:-10, top:"50%", transform:"translateY(-50%)",
+                  width:20, height:20, borderRadius:"50%", background:"rgba(0,0,0,0.85)" }} />
+              </div>
+
+              {/* ── Body (booking details) ── */}
+              <div style={{
+                background: "#0f0d0a",
+                border: "1px solid #a07830",
+                borderTop: "none",
+                borderRadius: "0 0 18px 18px",
+                padding: "20px 24px 24px"
+              }}>
+                {/* Key trip info — large */}
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:18 }}>
+                  {[
+                    ["📅", "Date", showConfirm.date ? new Date(showConfirm.date+"T12:00:00").toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"}) : "—"],
+                    ["⏰", "Time", showConfirm.timeSlot || "—"],
+                    ["👤", "Customer", showConfirm.customerName || "—"],
+                    ["📞", "Phone", showConfirm.phone || "—"],
+                  ].map(([icon, label, val], i) => (
+                    <div key={label} className="confirm-row" style={{ animationDelay: `${0.05 + i*0.06}s` }}>
+                      <p style={{ fontSize:10, color:"#7a5a20", margin:"0 0 2px", letterSpacing:"0.12em", textTransform:"uppercase" }}>{icon} {label}</p>
+                      <p style={{ fontSize:14, fontWeight:600, color:"#e8d4a0", margin:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{val}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Route */}
+                <div className="confirm-row" style={{ animationDelay:"0.3s", background:"rgba(240,192,96,0.04)", border:"1px solid rgba(160,120,48,0.2)", borderRadius:10, padding:"12px 14px", marginBottom:14 }}>
+                  <div style={{ display:"flex", alignItems:"flex-start", gap:10 }}>
+                    <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:4, paddingTop:2 }}>
+                      <div style={{ width:8, height:8, borderRadius:"50%", background:"#f0c060", border:"2px solid #a07830" }} />
+                      <div style={{ width:1, height:20, background:"rgba(160,120,48,0.4)" }} />
+                      <div style={{ width:8, height:8, borderRadius:2, background:"#f0c060" }} />
+                    </div>
+                    <div style={{ flex:1, overflow:"hidden" }}>
+                      <p style={{ fontSize:11, color:"#7a5a20", margin:"0 0 4px", letterSpacing:"0.1em" }}>PICKUP</p>
+                      <p style={{ fontSize:13, color:"#e8d4a0", margin:"0 0 10px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{showConfirm.pickupAddress || "—"}</p>
+                      <p style={{ fontSize:11, color:"#7a5a20", margin:"0 0 4px", letterSpacing:"0.1em" }}>DROPOFF</p>
+                      <p style={{ fontSize:13, color:"#e8d4a0", margin:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{showConfirm.dropoffAddress || "—"}</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Flight info (only if airport trip) */}
+                {showConfirm.airline && (
+                  <div className="confirm-row" style={{ animationDelay:"0.38s", display:"flex", gap:8, marginBottom:14 }}>
+                    <div style={{ flex:1, background:"rgba(59,158,255,0.06)", border:"1px solid rgba(59,158,255,0.2)", borderRadius:8, padding:"8px 12px" }}>
+                      <p style={{ fontSize:10, color:"#3b6aaa", margin:"0 0 2px", letterSpacing:"0.12em" }}>✈️ AIRLINE</p>
+                      <p style={{ fontSize:13, fontWeight:600, color:"#8bc4ff", margin:0 }}>{showConfirm.airline}</p>
+                    </div>
+                    <div style={{ flex:1, background:"rgba(59,158,255,0.06)", border:"1px solid rgba(59,158,255,0.2)", borderRadius:8, padding:"8px 12px" }}>
+                      <p style={{ fontSize:10, color:"#3b6aaa", margin:"0 0 2px", letterSpacing:"0.12em" }}>FLIGHT</p>
+                      <p style={{ fontSize:13, fontWeight:600, color:"#8bc4ff", margin:0, fontFamily:"monospace" }}>{showConfirm.flightNumber}</p>
+                    </div>
+                    {showConfirm.flightStatus && (
+                      <div style={{ flex:1, background:"rgba(80,200,80,0.06)", border:"1px solid rgba(80,200,80,0.2)", borderRadius:8, padding:"8px 12px" }}>
+                        <p style={{ fontSize:10, color:"#3a8a3a", margin:"0 0 2px", letterSpacing:"0.12em" }}>STATUS</p>
+                        <p style={{ fontSize:12, fontWeight:700, color: showConfirm.flightStatus==="delayed"?"#fc6":showConfirm.flightStatus==="cancelled"?"#f66":"#6c6", margin:0, textTransform:"uppercase" }}>{showConfirm.flightStatus}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Payment — large gold amount */}
+                <div className="confirm-row" style={{ animationDelay:"0.44s", display:"flex", alignItems:"center", justifyContent:"space-between",
+                  background:"linear-gradient(135deg, rgba(240,192,96,0.08), rgba(160,120,48,0.04))",
+                  border:"1px solid rgba(160,120,48,0.3)", borderRadius:10, padding:"12px 16px", marginBottom:18 }}>
+                  <div>
+                    <p style={{ fontSize:10, color:"#7a5a20", margin:"0 0 2px", letterSpacing:"0.15em" }}>FARE · {showConfirm.tripType==="round-trip"?"ROUND TRIP":"ONE WAY"}</p>
+                    {showConfirm.fareRoute && <p style={{ fontSize:11, color:"#9a8040", margin:"2px 0 0" }}>{showConfirm.fareRoute}</p>}
+                  </div>
+                  <p style={{ fontSize:30, fontWeight:800, color:"#f0c060", margin:0, fontFamily:"Georgia, serif", letterSpacing:"-0.02em" }}>
+                    ${showConfirm.paymentAmount || "—"}
+                  </p>
+                </div>
+
+                {/* Actions */}
+                <div className="confirm-row" style={{ animationDelay:"0.5s", display:"flex", gap:8 }}>
+                  <button onClick={() => setShowConfirm(null)}
+                    style={{ flex:1, padding:"11px 0", borderRadius:10, border:"1px solid rgba(160,120,48,0.3)",
+                      background:"transparent", color:"#7a5a20", fontSize:14, fontWeight:600,
+                      cursor:"pointer", fontFamily:"inherit", transition:"all 0.2s" }}>
+                    Close
+                  </button>
+                  <button onClick={() => { setShowConfirm(null); setView("dashboard"); }}
+                    style={{ flex:2, padding:"11px 0", borderRadius:10, border:"none",
+                      background:"linear-gradient(135deg, #c08020, #e0a030)",
+                      color:"#0f0d0a", fontSize:14, fontWeight:800,
+                      cursor:"pointer", fontFamily:"inherit", letterSpacing:"0.04em",
+                      boxShadow:"0 4px 20px rgba(200,150,30,0.3)", transition:"all 0.2s" }}>
+                    View Dashboard →
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ══════════════ DELETE CONFIRMATION MODAL ══════════════ */}
+        {deleteConfirmId && (
+          <div role="alertdialog" aria-label="Delete booking confirmation" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setDeleteConfirmId(null)}>
+            <div className="card-enter" onClick={e => e.stopPropagation()} style={{ background: "#161820", border: "1px solid #3a1a1a", borderRadius: 14, padding: 24, maxWidth: 340, width: "100%", textAlign: "center" }}>
+              <div style={{ fontSize: 32, marginBottom: 12 }}>🗑️</div>
+              <p style={{ fontSize: 16, fontWeight: 700, color: "#fff", marginBottom: 6 }}>Delete Booking?</p>
+              <p style={{ fontSize: 14, color: "#bbb", marginBottom: 18 }}>This action cannot be undone.</p>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={() => setDeleteConfirmId(null)} style={{ flex: 1, padding: 12, borderRadius: 8, border: "1px solid #2a2d36", background: "transparent", color: "#bbb", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+                <button onClick={confirmDelete} style={{ flex: 1, padding: 12, borderRadius: 8, border: "none", background: "linear-gradient(135deg, #ff3a30, #cc2020)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Delete</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ══════════════ MIC PERMISSION PROMPT ══════════════ */}
+        {showMicPrompt && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={() => setShowMicPrompt(false)}>
+            <div className="card-enter" onClick={e => e.stopPropagation()} style={{
+              background: "linear-gradient(180deg, #1e2030 0%, #161820 100%)",
+              border: "1px solid #2a2d3a", borderRadius: 18, padding: 28, maxWidth: 340, width: "100%",
+              textAlign: "center", boxShadow: "0 20px 60px rgba(0,0,0,0.5)"
+            }}>
+              <div style={{
+                width: 64, height: 64, borderRadius: 16, margin: "0 auto 16px",
+                background: "linear-gradient(135deg, #ff3a30, #ff6b35)",
+                display: "flex", alignItems: "center", justifyContent: "center", fontSize: 30
+              }}>🎤</div>
+              <h3 style={{ fontSize: 17, fontWeight: 700, color: "#fff", marginBottom: 8 }}>Allow Microphone Access?</h3>
+              <p style={{ fontSize: 14, color: "#999", lineHeight: 1.5, marginBottom: 6 }}>
+                Dispatch HQ needs your microphone to transcribe booking details by voice.
+              </p>
+              <p style={{ fontSize: 13, color: "#aaa", marginBottom: 20 }}>
+                Your device will ask you to allow microphone access. Tap "Allow" when prompted.
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <button onClick={requestMicPermission} style={{
+                  width: "100%", padding: 14, borderRadius: 12, border: "none",
+                  background: "linear-gradient(135deg, #ff3a30, #ff6b35)",
+                  color: "#fff", fontSize: 16, fontWeight: 700, cursor: "pointer",
+                  fontFamily: "inherit", letterSpacing: "0.03em",
+                  boxShadow: "0 4px 16px rgba(255,58,48,0.3)"
+                }}>
+                  Allow Microphone
+                </button>
+                <button onClick={() => { setShowMicPrompt(false); setVoiceError("Mic skipped. Type your booking info in the text box and tap AI Smart Fill."); }} style={{
+                  width: "100%", padding: 12, borderRadius: 12,
+                  border: "1px solid #2a2d36", background: "transparent",
+                  color: "#bbb", fontSize: 15, fontWeight: 600, cursor: "pointer",
+                  fontFamily: "inherit"
+                }}>
+                  Not Now \u2014 I'll Type Instead
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ══════════════ DASHBOARD ══════════════ */}
+        {view === "dashboard" && (
+          <div className="card-enter">
+            <h2 style={{ fontSize: 20, fontWeight: 700, color: "#fff", marginBottom: 16 }}>📊 Bookings Dashboard</h2>
+
+            {/* Revenue & Stats */}
+            {(() => {
+              const now = new Date();
+              const weekStart = new Date(now); weekStart.setDate(now.getDate() - now.getDay()); weekStart.setHours(0,0,0,0);
+              const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+              const active = bookings.filter(b => !b.deleted);
+              const fares = active.map(b => parseFloat(b.paymentAmount)||0);
+              const weekFares = active.filter(b => new Date(b.date+"T12:00:00") >= weekStart).map(b => parseFloat(b.paymentAmount)||0);
+              const monthFares = active.filter(b => new Date(b.date+"T12:00:00") >= monthStart).map(b => parseFloat(b.paymentAmount)||0);
+              const totalFare = fares.reduce((a,v)=>a+v,0);
+              const weekTotal = weekFares.reduce((a,v)=>a+v,0);
+              const monthTotal = monthFares.reduce((a,v)=>a+v,0);
+              const avgFare = fares.length ? (totalFare/fares.length).toFixed(0) : 0;
+              const airportCount = active.filter(b => b.fareRoute && b.fareRoute.includes("→")).length;
+              const driverCounts = {};
+              active.forEach(b => { if (b.driverNumber) driverCounts[b.driverNumber] = (driverCounts[b.driverNumber]||0)+1; });
+              const topDriver = Object.entries(driverCounts).sort((a,b)=>b[1]-a[1])[0];
+              const SC = {background:"#0d0e12",border:"1px solid #1e2028",borderRadius:10,padding:"12px 14px"};
+              return (
+                <div style={{ marginBottom: 18 }}>
+                  <p style={{ fontSize: 12, fontWeight: 700, color: "#555", letterSpacing: "0.1em", marginBottom: 10 }}>STATS</p>
+                  <div className="resp-grid-3" style={{ display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:8 }}>
+                    <div style={SC}><div style={{fontSize:18,marginBottom:4}}>📋</div><div style={{fontSize:20,fontWeight:800,color:"#fff"}}>{active.length}</div><div style={{fontSize:11,color:"#555"}}>Total Trips</div><div style={{fontSize:12,color:"#888",marginTop:4}}>Avg ${avgFare}</div></div>
+                    <div style={SC}><div style={{fontSize:18,marginBottom:4}}>💰</div><div style={{fontSize:20,fontWeight:800,color:"#6c6"}}>${weekTotal.toLocaleString()}</div><div style={{fontSize:11,color:"#555"}}>This Week</div><div style={{fontSize:12,color:"#888",marginTop:4}}>{weekFares.length} trips</div></div>
+                    <div style={SC}><div style={{fontSize:18,marginBottom:4}}>📅</div><div style={{fontSize:20,fontWeight:800,color:"#3b9eff"}}>${monthTotal.toLocaleString()}</div><div style={{fontSize:11,color:"#555"}}>This Month</div><div style={{fontSize:12,color:"#888",marginTop:4}}>{monthFares.length} trips</div></div>
+                  </div>
+                  <div className="resp-grid-3" style={{ display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:16 }}>
+                    <div style={SC}><div style={{fontSize:18,marginBottom:4}}>✈️</div><div style={{fontSize:20,fontWeight:800,color:"#fc6"}}>{airportCount}</div><div style={{fontSize:11,color:"#555"}}>Airport Trips</div><div style={{fontSize:12,color:"#888",marginTop:4}}>{active.length?Math.round(airportCount/active.length*100):0}% of total</div></div>
+                    <div style={SC}><div style={{fontSize:18,marginBottom:4}}>🚗</div><div style={{fontSize:20,fontWeight:800,color:"#ff6b35"}}>{topDriver?`#${topDriver[0]}`:"—"}</div><div style={{fontSize:11,color:"#555"}}>Top Driver</div><div style={{fontSize:12,color:"#888",marginTop:4}}>{topDriver?`${topDriver[1]} trips`:"No trips"}</div></div>
+                    <div style={SC}><div style={{fontSize:18,marginBottom:4}}>💵</div><div style={{fontSize:20,fontWeight:800,color:"#f88"}}>${totalFare.toLocaleString()}</div><div style={{fontSize:11,color:"#555"}}>All-Time Revenue</div><div style={{fontSize:12,color:"#888",marginTop:4}}>{fares.length} paid trips</div></div>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Driver Performance */}
+            {bookings.filter(b=>!b.deleted&&b.driverNumber).length > 0 && (() => {
+              const driverStats = {};
+              bookings.filter(b=>!b.deleted&&b.driverNumber).forEach(b => {
+                if (!driverStats[b.driverNumber]) driverStats[b.driverNumber] = { trips:0, revenue:0, airport:0 };
+                driverStats[b.driverNumber].trips++;
+                driverStats[b.driverNumber].revenue += parseFloat(b.paymentAmount)||0;
+                const pu = (b.pickupAddress||"").toUpperCase(); const do_ = (b.dropoffAddress||"").toUpperCase();
+                if (/JFK|LGA|EWR/.test(pu+do_)) driverStats[b.driverNumber].airport++;
+              });
+              const sorted = Object.entries(driverStats).sort((a,b)=>b[1].trips-a[1].trips);
+              return (
+                <div style={{ marginBottom: 18 }}>
+                  <p style={{ fontSize: 12, fontWeight: 700, color: "#555", letterSpacing: "0.1em", marginBottom: 10 }}>DRIVER PERFORMANCE</p>
+                  <div style={{ background: "#0d0e12", border: "1px solid #1e2028", borderRadius: 10, overflow: "hidden" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", padding: "6px 14px", borderBottom: "1px solid #12141a" }}>
+                      {["Driver","Trips","Revenue","Airport"].map(h => <span key={h} style={{ fontSize: 11, fontWeight: 700, color: "#555", letterSpacing: "0.08em" }}>{h}</span>)}
+                    </div>
+                    {sorted.map(([id, s]) => (
+                      <div key={id} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", padding: "8px 14px", borderBottom: "1px solid #0a0b0f", alignItems: "center" }}>
+                        <span style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35" }}>#{id}</span>
+                        <span style={{ fontSize: 14, color: "#e8e6e1" }}>{s.trips}</span>
+                        <span style={{ fontSize: 14, color: "#6c6" }}>${s.revenue.toLocaleString()}</span>
+                        <span style={{ fontSize: 13, color: "#fc6" }}>{s.airport} ✈</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Search */}
+            <input aria-label="Search bookings by name, phone, driver, airline, flight, or date" placeholder="🔍 Search name, phone, driver, airline, flight, date..." value={searchQuery} onChange={e => handleSearchChange(e.target.value)} style={{...inputStyle, marginBottom: 12}} />
+
+            {/* Filters */}
+            <div style={{ background: "#12141a", border: "1px solid #1e2028", borderRadius: 12, padding: 14, marginBottom: 18 }}>
+              <p style={{ fontSize: 13, fontWeight: 700, color: "#aaa", letterSpacing: "0.1em", marginBottom: 10 }}>FILTERS</p>
+              <div className="resp-grid-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                <div>
+                  <label style={{...labelStyle, fontSize: 12}}>From</label>
+                  <input type="date" value={filters.dateFrom} onChange={e => setFilters(p=>({...p,dateFrom:e.target.value}))} style={{...inputStyle, fontSize: 13, padding: 8}} />
+                </div>
+                <div>
+                  <label style={{...labelStyle, fontSize: 12}}>To</label>
+                  <input type="date" value={filters.dateTo} onChange={e => setFilters(p=>({...p,dateTo:e.target.value}))} style={{...inputStyle, fontSize: 13, padding: 8}} />
+                </div>
+                <div>
+                  <label style={{...labelStyle, fontSize: 12}}>Driver</label>
+                  <select value={filters.driverNumber} onChange={e => setFilters(p=>({...p,driverNumber:e.target.value}))} style={{...inputStyle, fontSize: 13, padding: 8}}>
+                    <option value="">All</option>
+                    {DRIVERS.map(d => <option key={d.id} value={d.id}>#{d.id}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={{...labelStyle, fontSize: 12}}>Trip</label>
+                  <select value={filters.tripType} onChange={e => setFilters(p=>({...p,tripType:e.target.value}))} style={{...inputStyle, fontSize: 13, padding: 8}}>
+                    <option value="">All</option>
+                    <option value="one-way">One-Way</option>
+                    <option value="round-trip">Round-Trip</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{...labelStyle, fontSize: 12}}>Shift</label>
+                  <select value={filters.shift} onChange={e => setFilters(p=>({...p,shift:e.target.value}))} style={{...inputStyle, fontSize: 13, padding: 8}}>
+                    <option value="">All</option>
+                    <option value="morning">Morning (5am–4pm)</option>
+                    <option value="allday">All-Day</option>
+                    <option value="night">Night (5pm–12am)</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{...labelStyle, fontSize: 12}}>Day Type</label>
+                  <select value={filters.dayType} onChange={e => setFilters(p=>({...p,dayType:e.target.value}))} style={{...inputStyle, fontSize: 13, padding: 8}}>
+                    <option value="">All</option>
+                    <option value="weekday">Weekday</option>
+                    <option value="weekend">Weekend</option>
+                  </select>
+                </div>
+              </div>
+              <button onClick={() => setFilters({ dateFrom: "", dateTo: "", driverNumber: "", tripType: "", shift: "", dayType: "" })} style={{ marginTop: 8, padding: "4px 12px", borderRadius: 6, border: "1px solid #2a2d36", background: "transparent", color: "#aaa", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Clear Filters</button>
+            </div>
+
+            {/* Bookings count */}
+            <p style={{ fontSize: 14, color: "#999", marginBottom: 14 }}>{filteredBookings.length} booking{filteredBookings.length !== 1 ? "s" : ""} found</p>
+
+            {/* Weekday Section */}
+            <BookingSection title="📅 Weekdays (Mon–Fri)" bookings={groupedBookings.weekday} onEdit={editBooking} onDelete={deleteBooking} />
+
+            {/* Weekend Section */}
+            <BookingSection title="🌴 Weekends (Sat–Sun)" bookings={groupedBookings.weekend} onEdit={editBooking} onDelete={deleteBooking} />
+
+            {filteredBookings.length > dashPage && (
+              <div style={{ textAlign: "center", padding: "16px 0" }}>
+                <button onClick={() => setDashPage(p => p + 50)} style={{ padding: "9px 24px", borderRadius: 8, border: "1px solid #2a2d36", background: "transparent", color: "#888", fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>
+                  Load more ({filteredBookings.length - dashPage} remaining)
+                </button>
+              </div>
+            )}
+
+            {filteredBookings.length === 0 && (
+              <div style={{ textAlign: "center", padding: 48, color: "#777" }}>
+                <p style={{ fontSize: 36 }}>📭</p>
+                <p style={{ fontSize: 15, marginTop: 8 }}>No bookings found</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ══════════════ DRIVERS ══════════════ */}
+        {view === "drivers" && (
+          <div className="card-enter">
+            <h2 style={{ fontSize: 20, fontWeight: 700, color: "#fff", marginBottom: 16 }}>🚗 Driver Database</h2>
+
+            {/* Driver Management — Add Custom Drivers */}
+            {(() => {
+              const [customDrivers, setCustomDrivers] = React.useState(() => {
+                try { return JSON.parse(localStorage.getItem("dispatch-hq-custom-drivers") || "[]"); } catch { return []; }
+              });
+              const [showAdd, setShowAdd] = React.useState(false);
+              const [dForm, setDForm] = React.useState({ id:"", shiftStart:"06:00", shiftEnd:"18:00", daysOff:"", monthlyOff:"", airportPickup:false, airportDropoff:false, notes:"" });
+              const [dFormErr, setDFormErr] = React.useState("");
+              const saveCustom = (arr) => { setCustomDrivers(arr); try { localStorage.setItem("dispatch-hq-custom-drivers", JSON.stringify(arr)); } catch {} };
+              const addDriver = () => {
+                setDFormErr("");
+                const id = String(parseInt(dForm.id)||0).padStart(2,"0");
+                if (id === "00") { setDFormErr("Enter a driver number 1-99"); return; }
+                if ([...DRIVERS,...customDrivers].some(d=>d.id===id)) { setDFormErr("Driver #"+id+" already exists"); return; }
+                const d = { id, shiftStart:dForm.shiftStart, shiftEnd:dForm.shiftEnd,
+                  daysOff:dForm.daysOff.split(",").map(s=>s.trim()).filter(Boolean),
+                  monthlyOff:dForm.monthlyOff.split(",").map(s=>parseInt(s)).filter(n=>n>0&&n<=31),
+                  specialShifts:[], airportPickup:dForm.airportPickup, airportDropoff:dForm.airportDropoff, notes:dForm.notes.trim(), custom:true };
+                saveCustom([...customDrivers, d]);
+                setShowAdd(false);
+                setDForm({ id:"", shiftStart:"06:00", shiftEnd:"18:00", daysOff:"", monthlyOff:"", airportPickup:false, airportDropoff:false, notes:"" });
+              };
+              return (
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom: 12 }}>
+                    <p style={{ fontSize:13, color:"#aaa" }}>{DRIVERS.length + customDrivers.length} registered drivers</p>
+                    <button onClick={()=>setShowAdd(v=>!v)} style={{ padding:"7px 14px", borderRadius:8, border:"1px solid #ff3a30", background:showAdd?"rgba(255,58,48,0.1)":"transparent", color:"#ff6b35", fontSize:13, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>{showAdd?"✕ Cancel":"+ Add Driver"}</button>
+                  </div>
+                  {showAdd && (
+                    <div style={{ background:"#0d0e12", border:"1px solid #2a2d36", borderRadius:12, padding:16, marginBottom:14 }}>
+                      <p style={{ fontSize:14, fontWeight:700, color:"#ff6b35", marginBottom:12 }}>New Driver</p>
+                      {dFormErr && <p style={{ color:"#f88", fontSize:13, marginBottom:8 }}>{dFormErr}</p>}
+                      <div className="resp-grid-2" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:10 }}>
+                        <div><label style={labelStyle}>Driver #</label><input type="number" min="1" max="99" value={dForm.id} onChange={e=>setDForm(p=>({...p,id:e.target.value}))} style={inputStyle} placeholder="e.g. 25" /></div>
+                        <div><label style={labelStyle}>Notes</label><input type="text" value={dForm.notes} onChange={e=>setDForm(p=>({...p,notes:e.target.value}))} style={inputStyle} placeholder="Full time, PM shift..." /></div>
+                        <div><label style={labelStyle}>Shift Start</label><input type="time" value={dForm.shiftStart} onChange={e=>setDForm(p=>({...p,shiftStart:e.target.value}))} style={inputStyle} /></div>
+                        <div><label style={labelStyle}>Shift End</label><input type="time" value={dForm.shiftEnd} onChange={e=>setDForm(p=>({...p,shiftEnd:e.target.value}))} style={inputStyle} /></div>
+                        <div><label style={labelStyle}>Days Off (comma-separated)</label><input type="text" value={dForm.daysOff} onChange={e=>setDForm(p=>({...p,daysOff:e.target.value}))} style={inputStyle} placeholder="Sunday, Thursday" /></div>
+                        <div><label style={labelStyle}>Monthly Off Dates</label><input type="text" value={dForm.monthlyOff} onChange={e=>setDForm(p=>({...p,monthlyOff:e.target.value}))} style={inputStyle} placeholder="9, 19, 29" /></div>
+                      </div>
+                      <div style={{ display:"flex", gap:20, marginBottom:12 }}>
+                        <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, color:"#bbb", cursor:"pointer" }}><input type="checkbox" checked={dForm.airportPickup} onChange={e=>setDForm(p=>({...p,airportPickup:e.target.checked}))} /> Airport Pickup</label>
+                        <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, color:"#bbb", cursor:"pointer" }}><input type="checkbox" checked={dForm.airportDropoff} onChange={e=>setDForm(p=>({...p,airportDropoff:e.target.checked}))} /> Airport Dropoff</label>
+                      </div>
+                      <button onClick={addDriver} style={{ padding:"9px 20px", borderRadius:8, border:"none", background:"linear-gradient(135deg,#1a5a2a,#1a7a3a)", color:"#fff", fontSize:14, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>Save Driver</button>
+                    </div>
+                  )}
+                  {customDrivers.length > 0 && (
+                    <div style={{ padding:"8px 12px", background:"rgba(255,200,50,0.04)", border:"1px solid #2a2010", borderRadius:8, marginBottom:12, fontSize:12, color:"#886a30", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+                      <span>⚠️ {customDrivers.length} custom driver(s) — stored locally. Add to DRIVERS array in source to make permanent.</span>
+                      <button onClick={()=>saveCustom([])} style={{ background:"transparent", border:"none", color:"#f88", fontSize:12, cursor:"pointer", fontFamily:"inherit", marginLeft:12 }}>Remove all</button>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {DRIVERS.map(d => {
+                const shift = getShiftLabel(d);
+                return (
+                  <div key={d.id} style={{ background: "#12141a", border: "1px solid #1e2028", borderRadius: 12, padding: 14 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                      <span style={{ fontSize: 20, fontWeight: 800, color: "#ff6b35", fontFamily: "inherit" }}>#{d.id}</span>
+                      <Badge label={shift} ok={true} neutral />
+                      {d.airportPickup && <Badge label="✈ Pickup" ok={true} />}
+                      {d.airportDropoff && <Badge label="✈ Dropoff" ok={true} />}
+                      {!d.airportPickup && !d.airportDropoff && <Badge label="No Airport" ok={false} />}
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, fontSize: 14 }}>
+                      <span style={{ color: "#aaa" }}>Shift: <span style={{ color: "#bbb" }}>{formatShiftDisplay(d.shiftStart, d.shiftEnd)}</span></span>
+                      <span style={{ color: "#aaa" }}>Days Off: <span style={{ color: d.daysOff.length ? "#f88" : "#8f8" }}>{d.daysOff.length ? d.daysOff.join(", ") : "None"}</span></span>
+                    </div>
+                    {d.monthlyOff && <p style={{ fontSize: 13, color: "#bbb", marginTop: 4 }}>Monthly off: {d.monthlyOff.join(", ")}th</p>}
+                    {d.specialShifts && <p style={{ fontSize: 13, color: "#ca8", marginTop: 4 }}>Special: {d.specialShifts.map(s => `${s.day} ${formatShiftDisplay(s.start, s.end)}`).join(", ")}</p>}
+                    {d.notes && <p style={{ fontSize: 13, color: "#f96", marginTop: 4 }}>📌 {d.notes}</p>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* ══════════════ SYNC SETTINGS ══════════════ */}
+        {view === "sync" && (
+          <div className="card-enter">
+            <h2 style={{ fontSize: 20, fontWeight: 700, color: "#fff", marginBottom: 6 }}>🔐 Cloud Backup</h2>
+            <p style={{ fontSize: 14, color: "#bbb", marginBottom: 8 }}>
+              Back up bookings to Google Sheets so they're safe and accessible from any device.
+            </p>
+            <p style={{ fontSize: 13, color: "#999", marginBottom: 20 }}>
+              All data is encrypted before leaving your device — only you can read it with your passphrase.
+            </p>
+
+            {/* Status Banner */}
+            {syncMessage && (
+              <div style={{
+                padding: "10px 14px", borderRadius: 10, marginBottom: 16,
+                background: syncStatus === "success" ? "rgba(80,200,80,0.08)" : syncStatus === "error" ? "rgba(255,58,48,0.08)" : "rgba(255,200,80,0.08)",
+                border: `1px solid ${syncStatus === "success" ? "#1a3a1a" : syncStatus === "error" ? "#3a1a1a" : "#3a3a1a"}`,
+                display: "flex", alignItems: "center", gap: 10
+              }}>
+                <span style={{ fontSize: 16 }}>{syncStatus === "success" ? "✅" : syncStatus === "error" ? "❌" : "⏳"}</span>
+                <span style={{ fontSize: 14, color: syncStatus === "success" ? "#8f8" : syncStatus === "error" ? "#f88" : "#fc6" }}>{syncMessage}</span>
+              </div>
+            )}
+
+            {/* Maps API Key */}
+            <div style={{ background: "#12141a", border: "1px solid #1e2028", borderRadius: 14, padding: 18, marginBottom: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                <p style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", letterSpacing: "0.1em" }}>📍 GOOGLE MAPS AUTOCOMPLETE</p>
+                {mapsReady && <span style={{ fontSize: 12, padding: "2px 8px", borderRadius: 10, background: "rgba(80,200,80,0.1)", color: "#6c6", border: "1px solid #1a3a1a" }}>Active</span>}
+              </div>
+              <p style={{ fontSize: 12, color: "#bbb", marginBottom: 10, lineHeight: 1.5 }}>
+                Optional. Adds smart address suggestions to the Pickup and Dropoff fields as you type. 
+                Requires a Google Maps Platform API key with the <strong style={{ color: "#ccc" }}>Places API</strong> enabled.
+              </p>
+              <label style={labelStyle}>API Key</label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  type="password"
+                  value={mapsApiKey}
+                  onChange={e => setMapsApiKey(e.target.value)}
+                  placeholder="AIzaSy..."
+                  style={{ ...inputStyle, flex: 1 }}
+                />
+                <button onClick={() => {
+                  const key = mapsApiKey.trim();
+                  if (!key) { saveMapsKey(""); setMapsReady(false); return; }
+                  saveMapsKey(key);
+                  mapsLoadState = "idle"; // reset so it reloads with new key
+                  ensureMapsLoaded(key, ok => {
+                    setMapsReady(ok);
+                    if (!ok) { setAdminSyncMsg("❌ Could not load Google Maps. Check your API key and make sure the Places API is enabled in Google Cloud Console."); setAdminSyncStatus("error"); }
+                  });
+                }} style={{ padding: "0 16px", borderRadius: 8, border: "none", background: "#1e2028", color: "#bbb", fontSize: 14, cursor: "pointer", fontFamily: "inherit", fontWeight: 600, whiteSpace: "nowrap" }}>
+                  {mapsReady ? "Update" : "Activate"}
+                </button>
+              </div>
+              {mapsApiKey && !mapsReady && (
+                <p style={{ fontSize: 12, color: "#886a30", marginTop: 6 }}>⚠️ Key saved but Maps not loaded yet. Tap Activate.</p>
+              )}
+              <p style={{ fontSize: 11, color: "#555", marginTop: 8 }}>
+                Get a free key at console.cloud.google.com → APIs & Services → Enable "Places API" → Credentials → Create API Key.
+                Free tier: 28,500 requests/month.
+              </p>
+            </div>
+
+            {/* Connection Setup */}
+            <div style={{ background: "#12141a", border: "1px solid #1e2028", borderRadius: 14, padding: 18, marginBottom: 14 }}>
+              {/* Auto-sync toggle */}
+              <div style={{ background: "#0d0e12", border: "1px solid #1e2028", borderRadius: 10, padding: "12px 14px", marginBottom: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                <div style={{ flex: 1 }}>
+                  <p style={{ fontSize: 14, fontWeight: 700, color: "#e8e6e1", margin: "0 0 2px" }}>⚡ Auto-Sync</p>
+                  <p style={{ fontSize: 12, color: "#666", margin: 0 }}>Automatically push bookings every {autoSyncInterval} minutes{!passphrase ? " (unlock first)" : ""}</p>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <select value={autoSyncInterval} onChange={e => { const v = parseInt(e.target.value); setAutoSyncInterval(v); try { localStorage.setItem("dispatch-hq-autosync-interval", String(v)); } catch {} }} disabled={!passphrase} style={{ ...inputStyle, width: 100, padding: "6px 10px", fontSize: 13, opacity: passphrase ? 1 : 0.4 }}>
+                    {[5,10,15,30,60].map(m => <option key={m} value={m}>{m} min</option>)}
+                  </select>
+                  <button onClick={() => { const next = !autoSyncEnabled; setAutoSyncEnabled(next); try { localStorage.setItem("dispatch-hq-autosync", String(next)); } catch {}; }} disabled={!passphrase} style={{ padding: "7px 14px", borderRadius: 8, border: "none", background: autoSyncEnabled ? "linear-gradient(135deg,#1a5a2a,#1a7a3a)" : "#1e2028", color: autoSyncEnabled ? "#fff" : "#666", fontSize: 13, fontWeight: 700, cursor: passphrase ? "pointer" : "not-allowed", fontFamily: "inherit", opacity: passphrase ? 1 : 0.4 }}>{autoSyncEnabled ? "ON" : "OFF"}</button>
+                </div>
+              </div>
+
+              <p style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", marginBottom: 14, letterSpacing: "0.1em" }}>1. GOOGLE SHEETS ENDPOINT</p>
+              <label style={labelStyle}>Web App URL</label>
+              <p style={{ fontSize: 12, color: "#bbb", marginBottom: 6 }}>Paste the Google Apps Script URL from your setup. See the Setup Guide for step-by-step instructions.</p>
+              <input
+                type="url" placeholder="https://script.google.com/macros/s/.../exec"
+                value={syncEndpointInput}
+                onChange={e => setSyncEndpointInput(e.target.value.slice(0, 300))}
+                style={{...inputStyle, marginBottom: 10, fontSize: 14}}
+              />
+              <button onClick={testConnection} disabled={syncStatus === "syncing"} style={{
+                padding: "8px 16px", borderRadius: 8, border: "1px solid #2a2d36", background: "#161820",
+                color: "#bbb", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit"
+              }}>
+                {syncStatus === "syncing" ? "⏳ Testing..." : "🔌 Test Connection"}
+              </button>
+            </div>
+
+            {/* Encryption Setup */}
+            <div style={{ background: "#12141a", border: "1px solid #1e2028", borderRadius: 14, padding: 18, marginBottom: 14 }}>
+              <p style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", marginBottom: 14, letterSpacing: "0.1em" }}>2. ENCRYPTION PASSPHRASE</p>
+              <p style={{ fontSize: 13, color: "#999", marginBottom: 10 }}>
+                This passphrase encrypts all customer data. If lost, your remote data cannot be recovered.
+              </p>
+              <label style={labelStyle}>{syncConfigured ? "Enter Passphrase to Unlock" : "Set New Passphrase (8+ chars)"}</label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  type="password" placeholder="Enter encryption passphrase..."
+                  value={passphraseInput}
+                  onChange={e => setPassphraseInput(e.target.value.slice(0, 128))}
+                  style={{...inputStyle, flex: 1, fontSize: 14}}
+                />
+                {syncConfigured ? (
+                  <button onClick={unlockWithPassphrase} disabled={!passphraseInput} style={{
+                    padding: "8px 18px", borderRadius: 8, border: "none", flexShrink: 0,
+                    background: passphraseInput ? "linear-gradient(135deg, #2a6a2a, #3a8a3a)" : "#1e2028",
+                    color: passphraseInput ? "#fff" : "#444", fontSize: 14, fontWeight: 700, cursor: passphraseInput ? "pointer" : "default", fontFamily: "inherit"
+                  }}>🔓 Unlock</button>
+                ) : (
+                  <button onClick={saveSyncSettings} disabled={!passphraseInput || passphraseInput.length < 8} style={{
+                    padding: "8px 18px", borderRadius: 8, border: "none", flexShrink: 0,
+                    background: passphraseInput.length >= 8 ? "linear-gradient(135deg, #ff3a30, #ff6b35)" : "#1e2028",
+                    color: passphraseInput.length >= 8 ? "#fff" : "#444", fontSize: 14, fontWeight: 700, cursor: passphraseInput.length >= 8 ? "pointer" : "default", fontFamily: "inherit"
+                  }}>🔐 Save & Encrypt</button>
+                )}
+              </div>
+              {passphrase && (
+                <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#4a4", display: "inline-block" }} />
+                  <span style={{ fontSize: 13, color: "#8f8" }}>Passphrase active — encryption ready</span>
+                </div>
+              )}
+            </div>
+
+            {/* Sync Controls */}
+            {syncConfigured && passphrase && (
+              <div style={{ background: "#12141a", border: "1px solid #1e2028", borderRadius: 14, padding: 18, marginBottom: 14 }}>
+                <p style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", marginBottom: 14, letterSpacing: "0.1em" }}>3. SYNC CONTROLS</p>
+                <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                  <button onClick={syncNow} disabled={syncStatus === "syncing"} style={{
+                    flex: 1, padding: "14px", borderRadius: 10, border: "none",
+                    background: "linear-gradient(135deg, #ff3a30, #ff6b35)",
+                    color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+                    boxShadow: "0 4px 16px rgba(255,58,48,0.3)", opacity: syncStatus === "syncing" ? 0.6 : 1
+                  }}>
+                    {syncStatus === "syncing" ? "⏳ Syncing..." : "⬆️ Push to Google Sheets"}
+                  </button>
+                  <button onClick={pullFromRemote} disabled={syncStatus === "syncing"} style={{
+                    flex: 1, padding: "14px", borderRadius: 10, border: "none",
+                    background: "linear-gradient(135deg, #2255aa, #3377cc)",
+                    color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+                    boxShadow: "0 4px 16px rgba(34,85,170,0.3)", opacity: syncStatus === "syncing" ? 0.6 : 1
+                  }}>
+                    {syncStatus === "syncing" ? "⏳ Pulling..." : "⬇️ Pull from Google Sheets"}
+                  </button>
+                </div>
+                {syncConfig.lastSync && (
+                  <p style={{ fontSize: 13, color: "#999", textAlign: "center" }}>
+                    Last synced: {new Date(syncConfig.lastSync).toLocaleString()}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Encryption Info Panel */}
+            <div style={{ background: "#12141a", border: "1px solid #1e2028", borderRadius: 14, padding: 18 }}>
+              <p style={{ fontSize: 14, fontWeight: 700, color: "#999", marginBottom: 12, letterSpacing: "0.1em" }}>SECURITY DETAILS</p>
+              <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "8px 16px", fontSize: 14 }}>
+                {[
+                  ["Cipher", "AES-256-GCM (authenticated)"],
+                  ["Key Derivation", "PBKDF2 · SHA-256 · 310K iterations"],
+                  ["IV", "12-byte random per record"],
+                  ["Salt", "16-byte random per session"],
+                  ["Passphrase Storage", "Never stored — SHA-256 hash for verification only"],
+                  ["Data at Rest", "Encrypted in Google Sheets"],
+                  ["Data in Transit", "HTTPS + client-side encryption"],
+                  ["Local Bookings", bookings.length + " records"],
+                  ["Endpoint", syncConfig.endpointUrl ? "✅ Configured" : "❌ Not configured"],
+                  ["Encryption Key", passphrase ? "🔓 Active" : "🔒 Locked"],
+                ].map(([k, v]) => (
+                  <React.Fragment key={k}>
+                    <span style={{ color: "#999", fontWeight: 500 }}>{k}</span>
+                    <span style={{ color: "#aaa", fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>{v}</span>
+                  </React.Fragment>
+                ))}
+              </div>
+            </div>
+
+            {/* Reset option */}
+            <div style={{ marginTop: 14, textAlign: "center" }}>
+              {syncResetConfirm ? (
+                <div style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                  <span style={{ fontSize: 13, color: "#f88" }}>Reset config? Local bookings will be kept.</span>
+                  <button onClick={() => {
+                    localStorage.removeItem(SYNC_CONFIG_KEY);
+                    setSyncConfig({ endpointUrl: "", passphraseHash: "", lastSync: "" });
+                    setSyncEndpointInput(""); setPassphraseInput(""); setPassphrase("");
+                    setSyncConfigured(false); setSyncStatus("idle"); setSyncMessage("Config reset");
+                    setSyncResetConfirm(false);
+                  }} style={{ padding: "4px 12px", borderRadius: 5, border: "1px solid #3a1a1a", background: "rgba(255,58,48,0.1)", color: "#f66", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 700 }}>Yes, Reset</button>
+                  <button onClick={() => setSyncResetConfirm(false)} style={{ padding: "4px 12px", borderRadius: 5, border: "1px solid #2a2d36", background: "transparent", color: "#bbb", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+                </div>
+              ) : (
+                <button onClick={() => setSyncResetConfirm(true)} style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid #2a1a1a", background: "transparent", color: "#664", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
+                  Reset Sync Configuration
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ══════════════ BACKUP & RECOVERY ══════════════ */}
+        {view === "backup" && (
+          <div className="card-enter">
+            <h2 style={{ fontSize: 20, fontWeight: 700, color: "#fff", marginBottom: 6 }}>💾 Backup & Recovery</h2>
+            <p style={{ fontSize: 14, color: "#bbb", marginBottom: 20 }}>
+              Auto-backups run every 10 minutes. Manual backups and file exports keep your data safe.
+            </p>
+
+            {/* Status Banner */}
+            {backupMsg && (
+              <div style={{ padding: "10px 14px", borderRadius: 10, marginBottom: 16, background: backupMsgType === "success" ? "rgba(80,200,80,0.08)" : backupMsgType === "error" ? "rgba(255,58,48,0.08)" : "rgba(59,158,255,0.06)", border: `1px solid ${backupMsgType === "success" ? "#1a3a1a" : backupMsgType === "error" ? "#3a1a1a" : "#1a2a4a"}`, display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 16 }}>{backupMsgType === "success" ? "✅" : backupMsgType === "error" ? "❌" : "💡"}</span>
+                <span style={{ fontSize: 14, color: backupMsgType === "success" ? "#8f8" : backupMsgType === "error" ? "#f88" : "#8bc4ff", flex: 1 }}>{backupMsg}</span>
+                <button onClick={() => setBackupMsg("")} style={{ background: "transparent", border: "none", color: "#999", fontSize: 14, cursor: "pointer" }}>✕</button>
+              </div>
+            )}
+
+            {/* Storage Info Bar */}
+            <div style={{ background: "#12141a", border: "1px solid #1e2028", borderRadius: 12, padding: 14, marginBottom: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <span style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", letterSpacing: "0.08em" }}>STORAGE</span>
+                <span style={{ fontSize: 13, color: "#aaa" }}>{storageInfo.capacityPercent}% of 5MB used</span>
+              </div>
+              <div style={{ height: 6, borderRadius: 3, background: "#1e2028", overflow: "hidden", marginBottom: 8 }}>
+                <div style={{ height: "100%", borderRadius: 3, width: `${Math.min(storageInfo.capacityPercent, 100)}%`, background: storageInfo.capacityPercent > 80 ? "#ff3a30" : storageInfo.capacityPercent > 50 ? "#fc6" : "#4ade80", transition: "width 0.3s" }} />
+              </div>
+              <div style={{ display: "flex", gap: 16, fontSize: 13, color: "#aaa" }}>
+                <span>📝 Bookings: <span style={{ color: "#bbb" }}>{storageInfo.bookingKB}KB</span></span>
+                <span>💾 Backups: <span style={{ color: "#bbb" }}>{storageInfo.backupKB}KB ({storageInfo.backupCount})</span></span>
+                <span>📊 Total: <span style={{ color: "#bbb" }}>{storageInfo.totalKB}KB</span></span>
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+              <button onClick={handleManualBackup} style={{ flex: 1, padding: "12px", borderRadius: 10, border: "none", background: "linear-gradient(135deg, #2a6a2a, #3a8a3a)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                💾 Back Up Now
+              </button>
+              <button onClick={handleExport} style={{ flex: 1, padding: "12px", borderRadius: 10, border: "none", background: "linear-gradient(135deg, #2255aa, #3377cc)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                📤 Export to File
+              </button>
+              <button onClick={() => fileInputRef.current?.click()} style={{ flex: 1, padding: "12px", borderRadius: 10, border: "1px solid #2a2d36", background: "transparent", color: "#aaa", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                📥 Import File
+              </button>
+              <input ref={fileInputRef} type="file" accept=".json" onChange={handleImport} style={{ display: "none" }} />
+            </div>
+
+            {/* Current Data Summary */}
+            <div style={{ background: "#12141a", border: "1px solid #1e2028", borderRadius: 12, padding: 14, marginBottom: 14 }}>
+              <p style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", letterSpacing: "0.08em", marginBottom: 10 }}>CURRENT DATA</p>
+              <div className="resp-grid-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, textAlign: "center" }}>
+                <div style={{ background: "#0d0e12", borderRadius: 8, padding: "10px 8px" }}>
+                  <p style={{ fontSize: 22, fontWeight: 800, color: "#fff" }}>{bookings.length}</p>
+                  <p style={{ fontSize: 12, color: "#aaa" }}>Bookings</p>
+                </div>
+                <div style={{ background: "#0d0e12", borderRadius: 8, padding: "10px 8px" }}>
+                  <p style={{ fontSize: 22, fontWeight: 800, color: "#4ade80" }}>{snapshots.length}</p>
+                  <p style={{ fontSize: 12, color: "#aaa" }}>Snapshots</p>
+                </div>
+                <div style={{ background: "#0d0e12", borderRadius: 8, padding: "10px 8px" }}>
+                  <p style={{ fontSize: 22, fontWeight: 800, color: "#3b9eff" }}>{backupLog.length}</p>
+                  <p style={{ fontSize: 12, color: "#aaa" }}>Log Entries</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Available Snapshots */}
+            <div style={{ background: "#12141a", border: "1px solid #1e2028", borderRadius: 12, padding: 14, marginBottom: 14 }}>
+              <p style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", letterSpacing: "0.08em", marginBottom: 10 }}>SAVED SNAPSHOTS</p>
+              {snapshots.length === 0 ? (
+                <p style={{ fontSize: 14, color: "#bbb", textAlign: "center", padding: 16 }}>No snapshots yet. Tap "Back Up Now" or wait for auto-backup.</p>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {snapshots.map(snap => (
+                    <div key={snap.key} style={{ background: "#0d0e12", border: "1px solid #1e2028", borderRadius: 8, padding: "10px 12px", borderLeft: `3px solid ${snap.type === "manual" ? "#4ade80" : "#3b9eff"}` }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: snap.type === "manual" ? "#4ade80" : "#3b9eff", textTransform: "uppercase", background: snap.type === "manual" ? "rgba(74,222,128,0.1)" : "rgba(59,158,255,0.1)", padding: "2px 6px", borderRadius: 4 }}>{snap.type === "manual" ? "💾 Manual" : "⏰ Auto"}</span>
+                          <span style={{ fontSize: 13, color: "#bbb" }}>{snap.count} bookings</span>
+                          <span style={{ fontSize: 12, color: "#bbb" }}>{snap.sizeKB}KB</span>
+                        </div>
+                        <div style={{ display: "flex", gap: 4 }}>
+                          {restoreConfirmKey === snap.key ? (
+                            <>
+                              <button onClick={() => handleRestore(snap.key)} style={{ padding: "3px 8px", borderRadius: 4, border: "none", background: "#ff3a30", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Restore</button>
+                              <button onClick={() => setRestoreConfirmKey(null)} style={{ padding: "3px 8px", borderRadius: 4, border: "1px solid #2a2d36", background: "transparent", color: "#aaa", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+                            </>
+                          ) : (
+                            <>
+                              <button onClick={() => setRestoreConfirmKey(snap.key)} style={{ padding: "3px 8px", borderRadius: 4, border: "1px solid #1a3a1a", background: "transparent", color: "#6c6", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>↩ Restore</button>
+                              <button onClick={() => handleDeleteSnapshot(snap.key)} style={{ padding: "3px 8px", borderRadius: 4, border: "1px solid #3a1a1a", background: "transparent", color: "#844", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>✕</button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      <p style={{ fontSize: 12, color: "#999" }}>{new Date(snap.timestamp).toLocaleString()}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Backup Log */}
+            <div style={{ background: "#12141a", border: "1px solid #1e2028", borderRadius: 12, padding: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                <p style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", letterSpacing: "0.08em" }}>BACKUP LOG</p>
+                <div style={{ display: "flex", gap: 4 }}>
+                  <button onClick={() => setShowBackupLog(!showBackupLog)} style={{ padding: "3px 10px", borderRadius: 4, border: "1px solid #2a2d36", background: "transparent", color: "#bbb", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>{showBackupLog ? "Hide" : "Show"} ({backupLog.length})</button>
+                  {backupLog.length > 0 && <button onClick={() => { BackupService.clearLog(); refreshBackupState(); }} style={{ padding: "3px 8px", borderRadius: 4, border: "1px solid #3a1a1a", background: "transparent", color: "#664", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Clear</button>}
+                </div>
+              </div>
+              {showBackupLog && (
+                <div style={{ maxHeight: 300, overflowY: "auto" }}>
+                  {backupLog.length === 0 ? (
+                    <p style={{ fontSize: 13, color: "#bbb", textAlign: "center", padding: 12 }}>No log entries yet</p>
+                  ) : (
+                    backupLog.map((entry, i) => (
+                      <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "6px 0", borderBottom: "1px solid #1a1c22" }}>
+                        <span style={{ fontSize: 14, flexShrink: 0 }}>
+                          {entry.action === "auto" ? "⏰" : entry.action === "manual" ? "💾" : entry.action === "export" ? "📤" : entry.action === "import" ? "📥" : entry.action === "restore" ? "↩️" : entry.action === "delete" ? "🗑" : "📋"}
+                        </span>
+                        <div style={{ flex: 1 }}>
+                          <p style={{ fontSize: 13, color: "#bbb" }}>{entry.message}</p>
+                          <p style={{ fontSize: 11, color: "#bbb" }}>{new Date(entry.timestamp).toLocaleString()}{entry.count > 0 ? ` · ${entry.count} bookings` : ""}</p>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+// ── Subcomponents ──
+
+const labelStyle = { display: "block", fontSize: 13, fontWeight: 600, color: "#bbb", letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 6 };
+const inputStyle = { width: "100%", padding: "12px 14px", borderRadius: 8, border: "1px solid #1e2028", background: "#0d0e12", color: "#e8e6e1", fontSize: 15, fontFamily: "'Noto Sans KR', 'JetBrains Mono', monospace", outline: "revert" };
+
+// ────────────────────────────────────────────────────────
+// LOGIN PAGE
+// ────────────────────────────────────────────────────────
+function LoginPage({ endpointUrl: initialEndpointUrl, onLogin, onSaveEndpoint }) {
+  const { useState: ust, useCallback: ucb, useRef: ur } = React;
+  const [tab, setTab] = ust("signin");
+  const [username, setUsername] = ust("");
+  const [password, setPassword] = ust("");
+  const [displayName, setDisplayName] = ust("");
+  const [email, setEmail] = ust("");
+  const [loading, setLoading] = ust(false);
+  const [error, setError] = ust("");
+  const [success, setSuccess] = ust("");
+  const [showPass, setShowPass] = ust(false);
+  const [endpointUrl, setEndpointUrl] = ust(initialEndpointUrl || "");
+  const [showUrlField, setShowUrlField] = ust(!initialEndpointUrl);
+
+  // Client-side pre-hash (SHA-256 via Web Crypto) before sending
+  async function clientHash(password) {
+    const enc = new TextEncoder();
+    const buf = await crypto.subtle.digest("SHA-256", enc.encode(password + "dispatch-hq-client-salt"));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
+  }
+
+  async function handleSignIn(e) {
+    e.preventDefault();
+    if (!username.trim() || !password) { setError("Please enter your username and password."); return; }
+    const url = endpointUrl.trim();
+    if (!url) { setError("Enter your Google Sheets URL below first."); setShowUrlField(true); return; }
+    if (!url.startsWith("https://script.google.com/")) { setError("URL must start with https://script.google.com/"); return; }
+    // Save the URL so it persists
+    if (onSaveEndpoint) onSaveEndpoint(url);
+    setLoading(true); setError(""); setSuccess("");
+    try {
+      const hash = await clientHash(password);
+      const resp = await fetch(url, {
+        method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ action: "login", username: username.trim().toLowerCase(), passwordHash: hash })
+      });
+      const data = await resp.json();
+      if (!data.success) { setError(data.error || "Sign in failed."); return; }
+      onLogin({ username: username.trim().toLowerCase(), role: data.role, displayName: data.displayName, token: data.token, expiresAt: data.expiresAt });
+    } catch(err) {
+      setError("Could not reach server. Check your internet connection.");
+    } finally { setLoading(false); }
+  }
+
+  async function handleSignUp(e) {
+    e.preventDefault();
+    if (!username.trim()) { setError("Username is required."); return; }
+    if (!/^[a-z0-9_]{3,30}$/.test(username.trim().toLowerCase())) { setError("Username: 3-30 characters, letters/numbers/underscores only."); return; }
+    if (!displayName.trim()) { setError("Display name is required."); return; }
+    if (!password || password.length < 8) { setError("Password must be at least 8 characters."); return; }
+    if (!endpointUrl) { setError("App not connected to Google Sheets. Ask your admin."); return; }
+    setLoading(true); setError(""); setSuccess("");
+    try {
+      const hash = await clientHash(password);
+      const resp = await fetch(endpointUrl, {
+        method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ action: "register", username: username.trim().toLowerCase(), passwordHash: hash, displayName: displayName.trim(), email: email.trim() })
+      });
+      const data = await resp.json();
+      if (!data.success) { setError(data.error || "Registration failed."); return; }
+      setSuccess("Account created! Your request is pending admin approval. You'll be able to sign in once approved.");
+      setUsername(""); setPassword(""); setDisplayName(""); setEmail("");
+    } catch(err) {
+      setError("Could not reach server. Check your internet connection.");
+    } finally { setLoading(false); }
+  }
+
+  const inp = { background: "#0d0e12", border: "1px solid #1e2028", borderRadius: 8, color: "#e8e6e1", fontSize: 15, padding: "12px 14px", width: "100%", outline: "none", fontFamily: "inherit", boxSizing: "border-box" };
+  const btn = { width: "100%", padding: "14px", borderRadius: 10, border: "none", fontSize: 16, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", transition: "all 0.2s" };
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#0a0b0f", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, position: "relative", overflow: "hidden" }}>
+      {/* Background glow orbs */}
+      <div style={{ position: "absolute", top: "15%", left: "10%", width: 300, height: 300, borderRadius: "50%", background: "radial-gradient(circle, rgba(255,58,48,0.08) 0%, transparent 70%)", pointerEvents: "none" }} />
+      <div style={{ position: "absolute", bottom: "20%", right: "5%", width: 400, height: 400, borderRadius: "50%", background: "radial-gradient(circle, rgba(59,158,255,0.05) 0%, transparent 70%)", pointerEvents: "none" }} />
+
+      <div style={{ width: "100%", maxWidth: 420, position: "relative", zIndex: 1 }}>
+        {/* Logo */}
+        <div style={{ textAlign: "center", marginBottom: 32 }}>
+          <div style={{ width: 68, height: 68, borderRadius: 18, background: "linear-gradient(135deg, #ff3a30, #ff6b35)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 34, marginBottom: 14, boxShadow: "0 8px 32px rgba(255,58,48,0.3)" }}>🚖</div>
+          <h1 style={{ color: "#fff", fontSize: 26, fontWeight: 800, margin: 0, letterSpacing: "0.03em" }}>DISPATCH HQ</h1>
+          <p style={{ color: "#555", fontSize: 14, marginTop: 4 }}>Taxi Dispatch Management</p>
+          <p style={{ color: "#3a3a4a", fontSize: 12, marginTop: 2 }}>택시 배차 관리 시스템</p>
+        </div>
+
+        {/* Card */}
+        <div style={{ background: "linear-gradient(145deg, #12141a, #0f1016)", border: "1px solid #1e2028", borderRadius: 20, padding: 28, boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}>
+          {/* Tabs */}
+          <div style={{ display: "flex", background: "#0a0b0f", borderRadius: 10, padding: 3, marginBottom: 24 }}>
+            {[["signin","Sign In"],["signup","Sign Up"]].map(([t, label]) => (
+              <button key={t} onClick={() => { setTab(t); setError(""); setSuccess(""); }} style={{
+                flex: 1, padding: "9px 0", borderRadius: 8, border: "none", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", transition: "all 0.2s",
+                background: tab === t ? "linear-gradient(135deg, #ff3a30, #ff6b35)" : "transparent",
+                color: tab === t ? "#fff" : "#555",
+                boxShadow: tab === t ? "0 2px 8px rgba(255,58,48,0.3)" : "none"
+              }}>{label}</button>
+            ))}
+          </div>
+
+          {/* Error / Success */}
+          {error && <div style={{ padding: "11px 14px", borderRadius: 8, background: "rgba(255,58,48,0.08)", border: "1px solid #3a1a1a", color: "#f88", fontSize: 14, marginBottom: 18, lineHeight: 1.5 }}>{error}</div>}
+          {success && <div style={{ padding: "11px 14px", borderRadius: 8, background: "rgba(80,200,80,0.06)", border: "1px solid #1a3a1a", color: "#8f8", fontSize: 14, marginBottom: 18, lineHeight: 1.5 }}>{success}</div>}
+
+          {tab === "signin" ? (
+            <form onSubmit={handleSignIn}>
+              {/* Google Sheets URL — shown when not configured */}
+              {showUrlField ? (
+                <div style={{ marginBottom: 14 }}>
+                  <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Google Sheets URL</label>
+                  <input style={{...inp, fontSize: 13}} type="url" value={endpointUrl} onChange={e => setEndpointUrl(e.target.value)} placeholder="https://script.google.com/macros/s/.../exec" autoComplete="off" />
+                  <p style={{ fontSize: 11, color: "#555", marginTop: 4 }}>Your Apps Script deployment URL. <span onClick={() => setShowUrlField(false)} style={{ color: "#ff6b35", cursor: "pointer" }}>{endpointUrl ? "Hide" : ""}</span></p>
+                </div>
+              ) : (
+                <div style={{ marginBottom: 14, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <span style={{ fontSize: 12, color: "#3a6a3a" }}>✓ Server connected</span>
+                  <button type="button" onClick={() => setShowUrlField(true)} style={{ background: "transparent", border: "none", color: "#555", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Change URL</button>
+                </div>
+              )}
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Username</label>
+                <input style={inp} type="text" value={username} onChange={e => setUsername(e.target.value)} placeholder="your_username (사용자 이름)" autoComplete="username" autoCapitalize="none" />
+              </div>
+              <div style={{ marginBottom: 20, position: "relative" }}>
+                <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Password</label>
+                <input style={inp} type={showPass ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" autoComplete="current-password" />
+                <button type="button" onClick={() => setShowPass(v => !v)} style={{ position: "absolute", right: 12, top: 36, background: "transparent", border: "none", color: "#555", cursor: "pointer", fontSize: 14 }}>{showPass ? "👁" : "👁️"}</button>
+              </div>
+              <button type="submit" disabled={loading} style={{ ...btn, background: loading ? "#1e2028" : "linear-gradient(135deg, #ff3a30, #ff6b35)", color: loading ? "#555" : "#fff", boxShadow: loading ? "none" : "0 4px 16px rgba(255,58,48,0.3)" }}>
+                {loading ? "Signing in…" : "Sign In →"}
+              </button>
+              <p style={{ textAlign: "center", fontSize: 13, color: "#444", marginTop: 16, marginBottom: 0 }}>No account? <button type="button" onClick={() => setTab("signup")} style={{ background: "none", border: "none", color: "#ff6b35", cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 600 }}>Request access</button></p>
+            </form>
+          ) : (
+            <form onSubmit={handleSignUp}>
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Display Name</label>
+                <input style={inp} type="text" value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="Your Full Name" autoComplete="name" />
+              </div>
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Username</label>
+                <input style={inp} type="text" value={username} onChange={e => setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g,""))} placeholder="letters_numbers_only" autoComplete="username" autoCapitalize="none" />
+                <p style={{ fontSize: 11, color: "#444", marginTop: 4 }}>3-30 characters. Letters, numbers, and _ only.</p>
+              </div>
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Email (optional)</label>
+                <input style={inp} type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="your@email.com" autoComplete="email" />
+              </div>
+              <div style={{ marginBottom: 20, position: "relative" }}>
+                <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Password</label>
+                <input style={inp} type={showPass ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} placeholder="Min 8 characters" autoComplete="new-password" />
+                <button type="button" onClick={() => setShowPass(v => !v)} style={{ position: "absolute", right: 12, top: 36, background: "transparent", border: "none", color: "#555", cursor: "pointer", fontSize: 14 }}>{showPass ? "👁" : "👁️"}</button>
+              </div>
+              <button type="submit" disabled={loading} style={{ ...btn, background: loading ? "#1e2028" : "linear-gradient(135deg, #1a5a2a, #1a7a3a)", color: loading ? "#555" : "#fff", boxShadow: loading ? "none" : "0 4px 16px rgba(80,200,80,0.2)" }}>
+                {loading ? "Sending request…" : "Request Access"}
+              </button>
+              <p style={{ textAlign: "center", fontSize: 12, color: "#444", marginTop: 14, lineHeight: 1.5, marginBottom: 0 }}>Account requires admin approval before sign in.</p>
+            </form>
+          )}
+        </div>
+
+        <p style={{ textAlign: "center", fontSize: 11, color: "#2a2d36", marginTop: 20 }}>Dispatch HQ · Secured</p>
+      </div>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────
+// ADMIN DASHBOARD
+// ────────────────────────────────────────────────────────
+function AdminDashboard({ currentUser, endpointUrl, onSignOut }) {
+  const { useState: ust, useEffect: uef, useCallback: ucb } = React;
+  const [users, setUsers] = ust([]);
+  const [stats, setStats] = ust({ activeSessions: 0, totalBookings: 0 });
+  const [loading, setLoading] = ust(true);
+  const [actionMsg, setActionMsg] = ust("");
+  const [filterStatus, setFilterStatus] = ust("all");
+  const [confirmAction, setConfirmAction] = ust(null); // { action, username, label }
+
+  const fetchUsers = ucb(async () => {
+    if (!endpointUrl) return;
+    try {
+      const resp = await fetch(endpointUrl + "?action=adminGetUsers&sessionToken=" + encodeURIComponent(currentUser.token), { method: "GET", redirect: "follow" });
+      const data = await resp.json();
+      if (data.success) { setUsers(data.users || []); setStats({ activeSessions: data.activeSessions || 0, totalBookings: data.totalBookings || 0 }); }
+    } catch(e) {}
+    finally { setLoading(false); }
+  }, [endpointUrl, currentUser.token]);
+
+  uef(() => { fetchUsers(); }, [fetchUsers]);
+
+  const doAction = async (action, targetUsername) => {
+    setConfirmAction(null);
+    setActionMsg("");
+    try {
+      const resp = await fetch(endpointUrl, {
+        method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ action, targetUsername, sessionToken: currentUser.token })
+      });
+      const data = await resp.json();
+      setActionMsg(data.success ? "✅ Done — " + (data.message || action) : "❌ " + (data.error || "Failed"));
+      if (data.success) fetchUsers();
+    } catch(e) { setActionMsg("❌ Network error"); }
+  };
+
+  const statusColors = { active: "#6c6", pending: "#fc6", rejected: "#f88", disabled: "#888" };
+  const filtered = filterStatus === "all" ? users : users.filter(u => u.status === filterStatus);
+  const pendingCount = users.filter(u => u.status === "pending").length;
+
+  const cardStyle = { background: "#0d0e12", border: "1px solid #1e2028", borderRadius: 12, padding: "14px 18px" };
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#0a0b0f", color: "#e8e6e1", fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif" }}>
+      {/* Header */}
+      <div style={{ background: "linear-gradient(90deg, #12141a, #0f1016)", borderBottom: "1px solid #1e2028", padding: "14px 24px", display: "flex", alignItems: "center", gap: 12 }}>
+        <span style={{ fontSize: 24 }}>🚖</span>
+        <div style={{ flex: 1 }}>
+          <p style={{ fontSize: 16, fontWeight: 800, color: "#fff", margin: 0, letterSpacing: "0.04em" }}>DISPATCH HQ</p>
+          <p style={{ fontSize: 12, color: "#ff6b35", margin: 0, fontWeight: 600 }}>Admin Dashboard</p>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 13, color: "#888" }}>👤 {currentUser.displayName}</span>
+          <button onClick={onSignOut} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #2a2d36", background: "transparent", color: "#888", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Sign Out</button>
+        </div>
+      </div>
+
+      <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px 20px" }}>
+        {/* Stats row */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 24 }}>
+          {[
+            ["👥", "Total Users", users.length, "#fff"],
+            ["⏳", "Pending Approval", pendingCount, pendingCount > 0 ? "#fc6" : "#fff"],
+            ["✅", "Active Users", users.filter(u => u.status==="active").length, "#6c6"],
+            ["📋", "Total Bookings", stats.totalBookings, "#3b9eff"],
+          ].map(([icon, label, val, col]) => (
+            <div key={label} style={cardStyle}>
+              <p style={{ fontSize: 20, margin: "0 0 4px" }}>{icon}</p>
+              <p style={{ fontSize: 22, fontWeight: 800, color: col, margin: "0 0 2px" }}>{val}</p>
+              <p style={{ fontSize: 12, color: "#555", margin: 0 }}>{label}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* Action feedback */}
+        {actionMsg && <div style={{ padding: "10px 14px", borderRadius: 8, background: actionMsg.startsWith("✅") ? "rgba(80,200,80,0.06)" : "rgba(255,58,48,0.06)", border: `1px solid ${actionMsg.startsWith("✅") ? "#1a3a1a" : "#3a1a1a"}`, color: actionMsg.startsWith("✅") ? "#8f8" : "#f88", fontSize: 14, marginBottom: 16 }}>{actionMsg}</div>}
+
+        {/* Confirm dialog */}
+        {confirmAction && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <div style={{ background: "#1a1c22", border: "1px solid #2a2d36", borderRadius: 16, padding: 24, maxWidth: 340, width: "90%" }}>
+              <p style={{ fontSize: 16, fontWeight: 700, color: "#fff", marginBottom: 8 }}>Confirm Action</p>
+              <p style={{ fontSize: 14, color: "#bbb", marginBottom: 20 }}>{confirmAction.label} <strong style={{ color: "#fff" }}>{confirmAction.username}</strong>?</p>
+              <div style={{ display: "flex", gap: 10 }}>
+                <button onClick={() => setConfirmAction(null)} style={{ flex: 1, padding: "10px", borderRadius: 8, border: "1px solid #2a2d36", background: "transparent", color: "#888", fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+                <button onClick={() => doAction(confirmAction.action, confirmAction.username)} style={{ flex: 1, padding: "10px", borderRadius: 8, border: "none", background: "#ff3a30", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Confirm</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Bookings section */}
+        <div style={{ ...cardStyle, padding: 0, overflow: "hidden", marginBottom: 14 }}>
+          <div style={{ padding: "14px 18px", borderBottom: "1px solid #1e2028", display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 20 }}>📋</span>
+            <div style={{ flex: 1 }}>
+              <p style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", margin: "0 0 2px", letterSpacing: "0.08em" }}>BOOKING DATA</p>
+              <p style={{ fontSize: 12, color: "#555", margin: 0 }}>{stats.totalBookings} records in cloud (AES-256 encrypted)</p>
+            </div>
+          </div>
+          <div style={{ padding: "12px 18px" }}>
+            <p style={{ fontSize: 13, color: "#888", margin: "0 0 10px", lineHeight: 1.6 }}>
+              Booking data is encrypted client-side before syncing. Only dispatcher devices holding the decryption passphrase can read it — the cloud storage and this admin panel cannot decrypt it.
+            </p>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <div style={{ padding: "8px 14px", borderRadius: 8, background: "#0a0b0f", border: "1px solid #1e2028", fontSize: 13, color: "#bbb" }}>
+                📊 To view bookings → sign in as a dispatcher → Dashboard tab
+              </div>
+              <div style={{ padding: "8px 14px", borderRadius: 8, background: "#0a0b0f", border: "1px solid #1e2028", fontSize: 13, color: "#bbb" }}>
+                💾 To export → dispatcher → Backup tab → Export JSON
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Users table */}
+        <div style={{ ...cardStyle, padding: 0, overflow: "hidden" }}>
+          <div style={{ padding: "14px 18px", borderBottom: "1px solid #1e2028", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <p style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", margin: 0, letterSpacing: "0.08em", flex: 1 }}>DISPATCHER ACCOUNTS</p>
+            <div style={{ display: "flex", gap: 4 }}>
+              {["all","pending","active","disabled"].map(s => (
+                <button key={s} onClick={() => setFilterStatus(s)} style={{ padding: "5px 10px", borderRadius: 6, border: filterStatus === s ? "1px solid #ff3a30" : "1px solid #1e2028", background: filterStatus === s ? "rgba(255,58,48,0.1)" : "transparent", color: filterStatus === s ? "#ff6b35" : "#555", fontSize: 12, cursor: "pointer", fontFamily: "inherit", fontWeight: 600, textTransform: "capitalize" }}>{s}{s==="pending" && pendingCount > 0 ? ` (${pendingCount})` : ""}</button>
+              ))}
+            </div>
+            <button onClick={fetchUsers} style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid #1e2028", background: "transparent", color: "#666", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>↻ Refresh</button>
+          </div>
+
+          {loading ? (
+            <div style={{ padding: 40, textAlign: "center", color: "#555" }}>Loading users…</div>
+          ) : filtered.length === 0 ? (
+            <div style={{ padding: 40, textAlign: "center", color: "#555" }}>{filterStatus === "pending" ? "No pending registrations" : "No users found"}</div>
+          ) : (
+            filtered.map(user => (
+              <div key={user.id} style={{ padding: "14px 18px", borderBottom: "1px solid #12141a", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                <div style={{ flex: 1, minWidth: 180 }}>
+                  <p style={{ fontSize: 14, fontWeight: 700, color: "#e8e6e1", margin: "0 0 2px" }}>{user.displayName}</p>
+                  <p style={{ fontSize: 12, color: "#666", margin: 0 }}>@{user.username}{user.email ? " · " + user.email : ""}</p>
+                  <p style={{ fontSize: 11, color: "#444", margin: "2px 0 0" }}>Registered {new Date(user.createdAt).toLocaleDateString()}</p>
+                </div>
+                <span style={{ fontSize: 12, padding: "3px 10px", borderRadius: 10, background: `rgba(${user.status==="active"?"80,200,80":user.status==="pending"?"255,200,50":user.status==="disabled"?"128,128,128":"255,80,80"},0.1)`, color: statusColors[user.status] || "#888", fontWeight: 700, border: `1px solid ${statusColors[user.status] || "#333"}22`, textTransform: "capitalize" }}>{user.status}</span>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {user.status === "pending" && <>
+                    <button onClick={() => setConfirmAction({ action: "approveUser", username: user.username, label: "Approve account for" })} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #1a3a1a", background: "rgba(80,200,80,0.1)", color: "#6c6", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>✓ Approve</button>
+                    <button onClick={() => setConfirmAction({ action: "rejectUser", username: user.username, label: "Reject account for" })} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #3a1a1a", background: "rgba(255,58,48,0.06)", color: "#f88", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>✗ Reject</button>
+                  </>}
+                  {user.status === "active" && <button onClick={() => setConfirmAction({ action: "disableUser", username: user.username, label: "Disable account for" })} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #2a2d36", background: "transparent", color: "#888", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Disable</button>}
+                  {user.status === "disabled" && <button onClick={() => setConfirmAction({ action: "enableUser", username: user.username, label: "Re-enable account for" })} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #1a3a1a", background: "transparent", color: "#6c6", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Enable</button>}
+                  {user.status !== "active" && <button onClick={() => setConfirmAction({ action: "deleteUser", username: user.username, label: "Permanently delete account for" })} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #3a1a1a", background: "transparent", color: "#f44", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Delete</button>}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div style={{ marginTop: 20, padding: "14px 18px", background: "#0d0e12", border: "1px solid #1a1c22", borderRadius: 12 }}>
+          <p style={{ fontSize: 13, color: "#555", margin: 0, lineHeight: 1.6 }}>
+            <strong style={{ color: "#888" }}>Admin credentials:</strong> To change your admin password, run <code style={{ background: "#1a1c22", padding: "1px 6px", borderRadius: 4, color: "#fc6" }}>Logger.log(hashPassword('newpassword'))</code> in the Apps Script editor, then update <code style={{ background: "#1a1c22", padding: "1px 6px", borderRadius: 4, color: "#fc6" }}>ADMIN_PASSWORD_HASH</code> and redeploy.
+          </p>
+        </div>
+
+        {/* ── Sync & Settings ── */}
+        {(() => {
+          const [adminSyncUrl, setAdminSyncUrl] = React.useState(() => {
+            try { const cfg = JSON.parse(localStorage.getItem("dispatch-hq-sync-config") || "{}"); return cfg.endpointUrl || ""; } catch { return ""; }
+          });
+          const [adminAuthToken, setAdminAuthToken] = React.useState(() => {
+            try { const cfg = JSON.parse(localStorage.getItem("dispatch-hq-sync-config") || "{}"); return cfg.authToken || ""; } catch { return ""; }
+          });
+          const [adminPassphrase, setAdminPassphrase] = React.useState("");
+          const [adminSyncMsg, setAdminSyncMsg] = React.useState("");
+          const [adminSyncStatus, setAdminSyncStatus] = React.useState("idle");
+          const [adminMapsKey, setAdminMapsKey] = React.useState(() => {
+            try { return localStorage.getItem("dispatch-hq-maps-key") || ""; } catch { return ""; }
+          });
+          const [showAdminPass, setShowAdminPass] = React.useState(false);
+
+          const saveAdminSync = () => {
+            if (!adminSyncUrl.trim()) { setAdminSyncMsg("Enter the Google Sheets URL"); return; }
+            if (!adminSyncUrl.startsWith("https://script.google.com/")) { setAdminSyncMsg("URL must start with https://script.google.com/"); return; }
+            try {
+              const existing = JSON.parse(localStorage.getItem("dispatch-hq-sync-config") || "{}");
+              const updated = { ...existing, endpointUrl: adminSyncUrl.trim(), authToken: adminAuthToken.trim() };
+              localStorage.setItem("dispatch-hq-sync-config", JSON.stringify(updated));
+              setAdminSyncMsg("✅ Saved. Reload the app to apply.");
+              setAdminSyncStatus("success");
+            } catch { setAdminSyncMsg("❌ Failed to save"); setAdminSyncStatus("error"); }
+          };
+
+          const testAdminConnection = async () => {
+            if (!adminSyncUrl.trim()) { setAdminSyncMsg("Enter the URL first"); return; }
+            setAdminSyncStatus("testing"); setAdminSyncMsg("Testing connection...");
+            try {
+              const resp = await fetch(adminSyncUrl.trim() + "?action=ping&token=" + encodeURIComponent(adminAuthToken.trim()), { method: "GET", redirect: "follow" });
+              const data = await resp.json();
+              if (data.success) {
+                setAdminSyncMsg("✅ Connected — " + (data.sheetName || "Sheet") + " · " + (data.recordCount || 0) + " records");
+                setAdminSyncStatus("success");
+              } else {
+                setAdminSyncMsg("❌ " + (data.error || "Server error"));
+                setAdminSyncStatus("error");
+              }
+            } catch (e) { setAdminSyncMsg("❌ Could not reach server — " + e.message); setAdminSyncStatus("error"); }
+          };
+
+          const saveAdminMapsKey = () => {
+            try {
+              if (adminMapsKey.trim()) localStorage.setItem("dispatch-hq-maps-key", adminMapsKey.trim());
+              else localStorage.removeItem("dispatch-hq-maps-key");
+              setAdminSyncMsg("✅ Maps API key saved. Reload the app to activate address autocomplete.");
+              setAdminSyncStatus("success");
+            } catch { setAdminSyncMsg("❌ Failed to save Maps key"); }
+          };
+
+          const iStyle = { width:"100%", padding:"10px 12px", borderRadius:8, border:"1px solid #1e2028", background:"#0d0e12", color:"#e8e6e1", fontSize:14, fontFamily:"inherit", outline:"revert", boxSizing:"border-box" };
+          const lStyle = { display:"block", fontSize:12, fontWeight:700, color:"#888", marginBottom:6, textTransform:"uppercase", letterSpacing:"0.06em" };
+
+          return (
+            <div style={{ marginTop: 20 }}>
+              <p style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", letterSpacing: "0.1em", marginBottom: 14 }}>⚙️ SETTINGS</p>
+
+              {/* Google Sheets Sync */}
+              <div style={{ background: "#0d0e12", border: "1px solid #1e2028", borderRadius: 12, padding: 18, marginBottom: 12 }}>
+                <p style={{ fontSize: 13, fontWeight: 700, color: "#ccc", marginBottom: 14 }}>🔗 Google Sheets Connection</p>
+
+                {adminSyncMsg && (
+                  <div style={{ padding: "8px 12px", borderRadius: 8, background: adminSyncStatus === "success" ? "rgba(80,200,80,0.06)" : "rgba(255,58,48,0.06)", border: `1px solid ${adminSyncStatus === "success" ? "#1a3a1a" : "#3a1a1a"}`, color: adminSyncStatus === "success" ? "#8f8" : "#f88", fontSize: 13, marginBottom: 12 }}>{adminSyncMsg}</div>
+                )}
+
+                <div style={{ marginBottom: 12 }}>
+                  <label style={lStyle}>Web App URL</label>
+                  <input type="url" value={adminSyncUrl} onChange={e => setAdminSyncUrl(e.target.value)} placeholder="https://script.google.com/macros/s/.../exec" style={iStyle} />
+                </div>
+                <div style={{ marginBottom: 14 }}>
+                  <label style={lStyle}>Auth Token</label>
+                  <input type="text" value={adminAuthToken} onChange={e => setAdminAuthToken(e.target.value)} placeholder="Your AUTH_TOKEN from Apps Script" style={iStyle} />
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={testAdminConnection} style={{ flex: 1, padding: "9px", borderRadius: 8, border: "1px solid #2a2d36", background: "transparent", color: "#bbb", fontSize: 14, cursor: "pointer", fontFamily: "inherit", fontWeight: 600 }}>Test Connection</button>
+                  <button onClick={saveAdminSync} style={{ flex: 1, padding: "9px", borderRadius: 8, border: "none", background: "linear-gradient(135deg,#1a5a2a,#1a7a3a)", color: "#fff", fontSize: 14, cursor: "pointer", fontFamily: "inherit", fontWeight: 700 }}>Save</button>
+                </div>
+              </div>
+
+              {/* Google Maps API Key */}
+              <div style={{ background: "#0d0e12", border: "1px solid #1e2028", borderRadius: 12, padding: 18, marginBottom: 12 }}>
+                <p style={{ fontSize: 13, fontWeight: 700, color: "#ccc", marginBottom: 14 }}>📍 Google Maps Autocomplete</p>
+                <div style={{ marginBottom: 12 }}>
+                  <label style={lStyle}>API Key</label>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <input type={showAdminPass ? "text" : "password"} value={adminMapsKey} onChange={e => setAdminMapsKey(e.target.value)} placeholder="AIzaSy..." style={{ ...iStyle, flex: 1 }} />
+                    <button onClick={() => setShowAdminPass(v => !v)} style={{ padding: "0 12px", borderRadius: 8, border: "1px solid #1e2028", background: "transparent", color: "#666", cursor: "pointer", fontSize: 14 }}>{showAdminPass ? "👁" : "👁️"}</button>
+                  </div>
+                  <p style={{ fontSize: 11, color: "#555", marginTop: 4 }}>Enables address autocomplete on booking form. Get a free key at console.cloud.google.com</p>
+                </div>
+                <button onClick={saveAdminMapsKey} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: "#1e2028", color: "#bbb", fontSize: 14, cursor: "pointer", fontFamily: "inherit", fontWeight: 600 }}>Save Maps Key</button>
+              </div>
+            </div>
+          );
+        })()}
+
+      </div>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────
+// WHISPER SERVICE — On-device HIPAA-compliant speech recognition
+// Uses OpenAI Whisper (tiny) via @xenova/transformers.
+// Audio is processed ENTIRELY in the browser — nothing sent to any server.
+// No Google, Apple, or Microsoft speech APIs used.
+// ────────────────────────────────────────────────────────
+// ── Bilingual number normalizer (English + Korean → digits) ──
+// Applied after transcription to convert spoken numbers to digit form
+// which Whisper sometimes returns as words, especially for address house numbers.
+function normalizeSpokenNumbers(text) {
+  if (!text) return "";
+  let t = text.trim();
+
+  // ── Korean digit-by-digit sequences ──
+  // e.g. "일이삼" → "123", "공오삼" → "053"
+  const KOR_DIGIT = { "영":0,"공":0,"일":1,"이":2,"삼":3,"사":4,"오":5,"육":6,"칠":7,"팔":8,"구":9 };
+  t = t.replace(/[영공일이삼사오육칠팔구]{2,}/g, (m) => {
+    const digits = Array.from(m).map(c => KOR_DIGIT[c]);
+    return digits.every(d => d !== undefined) ? digits.join("") : m;
+  });
+
+  // ── Korean large-unit numbers ──
+  // e.g. "백이십삼" → "123", "이천오백" → "2500", "사만오천" → "45000"
+  t = t.replace(/([일이삼사오육칠팔구]?)(천)([일이삼사오육칠팔구]?)(백)?([일이삼사오육칠팔구십]?)/g, (m, k천, 천w, k백, 백w, k십) => {
+    if (!천w) return m;
+    const thou = (KOR_DIGIT[k천] || 1) * 1000;
+    const hund = 백w ? (KOR_DIGIT[k백] || 1) * 100 : 0;
+    const tens = k십 ? (KOR_DIGIT[k십] || 0) * 10 : 0;
+    const result = thou + hund + tens;
+    return result > 0 ? String(result) : m;
+  });
+  t = t.replace(/([일이삼사오육칠팔구]?)(백)([일이삼사오육칠팔구]?)(십)?([일이삼사오육칠팔구]?)/g, (m, k백, 백w, k십a, 십w, k일) => {
+    if (!백w) return m;
+    const hund = (KOR_DIGIT[k백] || 1) * 100;
+    const tens = 십w ? (KOR_DIGIT[k십a] || 1) * 10 : 0;
+    const ones = KOR_DIGIT[k일] !== undefined ? KOR_DIGIT[k일] : 0;
+    const result = hund + tens + ones;
+    return result > 0 ? String(result) : m;
+  });
+
+  // ── English: sequences of digit words ──
+  // e.g. "one two three" → "123" (most common for house numbers)
+  const ENG_DIGIT = { zero:0,one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9 };
+  t = t.replace(/\b(zero|one|two|three|four|five|six|seven|eight|nine)(\s+(zero|one|two|three|four|five|six|seven|eight|nine)){1,4}\b/gi, (m) => {
+    const parts = m.toLowerCase().split(/\s+/);
+    return parts.every(p => ENG_DIGIT[p] !== undefined) ? parts.map(p => ENG_DIGIT[p]).join("") : m;
+  });
+
+  // ── English compound numbers ──
+  // e.g. "twenty three" → "23", "one hundred twenty five" → "125"
+  const ENG_TENS = { twenty:20,thirty:30,forty:40,fifty:50,sixty:60,seventy:70,eighty:80,ninety:90 };
+  const ENG_TEENS = { ten:10,eleven:11,twelve:12,thirteen:13,fourteen:14,fifteen:15,sixteen:16,seventeen:17,eighteen:18,nineteen:19 };
+  // hundreds: "one hundred [twenty] [three]"
+  t = t.replace(/\b(one|two|three|four|five|six|seven|eight|nine)\s+hundred(?:\s+(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety))?(?:\s+(one|two|three|four|five|six|seven|eight|nine))?\b/gi, (m, h, tens, ones) => {
+    const n = (ENG_DIGIT[h.toLowerCase()] * 100) + (tens ? ENG_TENS[tens.toLowerCase()] : 0) + (ones ? ENG_DIGIT[ones.toLowerCase()] : 0);
+    return String(n);
+  });
+  // tens + optional ones: "forty five" → "45"
+  t = t.replace(/\b(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[- ](one|two|three|four|five|six|seven|eight|nine))?\b/gi, (m, tens, ones) => {
+    return String(ENG_TENS[tens.toLowerCase()] + (ones ? ENG_DIGIT[ones.toLowerCase()] : 0));
+  });
+  // teens: "thirteen" → "13"
+  t = t.replace(/\b(ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)\b/gi, (m) => String(ENG_TEENS[m.toLowerCase()]));
+  // single digit words left alone (ambiguous — "one way" should stay)
+  // only replace if surrounded by non-alpha context (e.g. "apt one" → "apt 1")
+  t = t.replace(/(?<=\s)(zero|one|two|three|four|five|six|seven|eight|nine)(?=\s*(?:[A-Z#\n]|$))/gi, (m) => String(ENG_DIGIT[m.toLowerCase()]));
+
+  // ── Ordinals: "first" → "1st", "second floor" stays readable ──
+  const ORDINALS = { first:"1st",second:"2nd",third:"3rd",fourth:"4th",fifth:"5th",sixth:"6th",seventh:"7th",eighth:"8th",ninth:"9th",tenth:"10th" };
+  t = t.replace(/\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\b/gi, (m) => ORDINALS[m.toLowerCase()] || m);
+
+  // ── Korean floor/unit suffixes ──
+  t = t.replace(/(\d+)\s*층/g, "$1F");     // "3층" → "3F"
+  t = t.replace(/(\d+)\s*호/g, "Unit $1"); // "201호" → "Unit 201"
+  t = t.replace(/(\d+)\s*번지/g, "$1");    // "123번지" → "123"
+
+  return t.trim();
+}
+
+const WhisperService = (() => {
+  let _pipeline = null;
+  let _loadPromise = null;
+  let _loadProgress = 0;
+  const _progressCbs = [];
+
+  function onProgress(p) {
+    if (p && p.progress != null) _loadProgress = Math.round(p.progress);
+    _progressCbs.forEach(cb => cb(_loadProgress));
+  }
+
+  async function load() {
+    if (_pipeline) return _pipeline;
+    if (_loadPromise) return _loadPromise;
+    _loadPromise = (async () => {
+      const { pipeline, env } = await import("https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2");
+      env.allowLocalModels = false;
+      // whisper-tiny: multilingual, handles Korean + English simultaneously
+      _pipeline = await pipeline("automatic-speech-recognition", "Xenova/whisper-tiny", {
+        progress_callback: onProgress
+      });
+      return _pipeline;
+    })();
+    return _loadPromise;
+  }
+
+  function onLoadProgress(cb) { _progressCbs.push(cb); return () => { const i = _progressCbs.indexOf(cb); if (i >= 0) _progressCbs.splice(i, 1); }; }
+  function isLoaded() { return _pipeline != null; }
+  function getProgress() { return _loadProgress; }
+
+  async function transcribe(audioBlob) {
+    const asr = await load();
+    const arrayBuffer = await audioBlob.arrayBuffer();
+    let audioBuffer;
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+      ctx.close();
+    } catch(e) {
+      const ctx2 = new (window.AudioContext || window.webkitAudioContext)();
+      audioBuffer = await ctx2.decodeAudioData(arrayBuffer.slice(0));
+      ctx2.close();
+    }
+    // Resample to 16kHz (Whisper's required input rate)
+    let float32 = audioBuffer.getChannelData(0);
+    if (audioBuffer.sampleRate !== 16000) {
+      const ratio = audioBuffer.sampleRate / 16000;
+      const newLen = Math.round(float32.length / ratio);
+      const resampled = new Float32Array(newLen);
+      for (let i = 0; i < newLen; i++) resampled[i] = float32[Math.round(i * ratio)];
+      float32 = resampled;
+    }
+
+    const result = await asr(float32, {
+      // AUTO-DETECT language — Whisper identifies Korean vs English per-utterance
+      // Forcing a language hurts bilingual speakers who mix both in one address
+      language: null,
+      task: "transcribe",
+      // Bilingual prompt: primes Whisper to expect address-shaped output in either language
+      // Numbers are explicitly mentioned to bias toward digit-friendly transcription
+      initial_prompt: "주소를 말하고 있습니다. The speaker is saying a street address. Numbers: 123, 45, 7. 숫자: 일이삼, 사오, 칠. New York area: JFK, Manhattan, Queens, Flushing, Brooklyn, Bronx, Newark, LaGuardia.",
+    });
+
+    const raw = (result.text || "").trim().replace(/^[\s.,]+|[\s.,]+$/g, "");
+    // Apply bilingual number normalization
+    return normalizeSpokenNumbers(raw);
+  }
+
+  return { load, transcribe, onLoadProgress, isLoaded, getProgress };
+})();
+
+// ────────────────────────────────────────────────────────
+// DEVICE PASSPHRASE GATE
+// Shown after login, before the booking app loads.
+// Prompts for the device passphrase that encrypts local bookings.
+// Passphrase held in memory only — never stored.
+// ────────────────────────────────────────────────────────
+function DevicePassphraseGate({ onUnlocked, isFirstTime }) {
+  const { useState: ust } = React;
+  const [passphrase, setPassphrase] = ust("");
+  const [error, setError]           = ust("");
+  const [loading, setLoading]       = ust(false);
+  const [showPass, setShowPass]     = ust(false);
+
+  const handleUnlock = async (e) => {
+    e.preventDefault();
+    if (!passphrase || passphrase.length < 8) {
+      setError("Passphrase must be at least 8 characters.");
+      return;
+    }
+    setLoading(true); setError("");
+    try {
+      const bookings = await loadBookingsEncrypted(passphrase);
+      onUnlocked(passphrase, bookings);
+    } catch (err) {
+      if (err.message === "WRONG_PASSPHRASE") {
+        setError("Wrong passphrase — could not decrypt your bookings. Try again.");
+      } else {
+        setError("Could not unlock: " + err.message);
+      }
+      setLoading(false);
+    }
+  };
+
+  const inp = { background: "#0d0e12", border: "1px solid #1e2028", borderRadius: 8, color: "#e8e6e1", fontSize: 15, padding: "12px 14px", width: "100%", outline: "none", fontFamily: "inherit", boxSizing: "border-box" };
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#0a0b0f", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ width: "100%", maxWidth: 400 }}>
+        <div style={{ textAlign: "center", marginBottom: 28 }}>
+          <div style={{ width: 60, height: 60, borderRadius: 16, background: "linear-gradient(135deg, #1a4a8a, #1a6aff)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 28, marginBottom: 12 }}>🔐</div>
+          <h2 style={{ color: "#fff", fontSize: 22, fontWeight: 800, margin: "0 0 4px" }}>Enter Device Passphrase</h2>
+          <p style={{ color: "#555", fontSize: 13, margin: 0 }}>
+            {isFirstTime
+              ? "Create a passphrase to encrypt your bookings on this device. You'll enter it each time you open the app."
+              : "Your bookings are encrypted on this device. Enter your passphrase to unlock them."}
+          </p>
+        </div>
+
+        <div style={{ background: "linear-gradient(145deg, #12141a, #0f1016)", border: "1px solid #1e2028", borderRadius: 18, padding: 24, boxShadow: "0 16px 48px rgba(0,0,0,0.5)" }}>
+          {error && (
+            <div style={{ padding: "10px 14px", background: "rgba(255,58,48,0.07)", border: "1px solid #3a1a1a", borderRadius: 8, color: "#f88", fontSize: 13, marginBottom: 16, lineHeight: 1.5 }}>{error}</div>
+          )}
+
+          <form onSubmit={handleUnlock}>
+            <div style={{ marginBottom: 20, position: "relative" }}>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#666", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 6 }}>
+                {isFirstTime ? "Create Passphrase" : "Passphrase"}
+              </label>
+              <input
+                type={showPass ? "text" : "password"}
+                value={passphrase}
+                onChange={e => setPassphrase(e.target.value)}
+                placeholder={isFirstTime ? "Min 8 characters — write this down" : "Enter your passphrase"}
+                autoFocus style={inp} autoComplete="off"
+              />
+              <button type="button" onClick={() => setShowPass(v => !v)} style={{ position: "absolute", right: 12, top: 34, background: "transparent", border: "none", color: "#555", cursor: "pointer", fontSize: 15 }}>{showPass ? "👁" : "👁️"}</button>
+            </div>
+
+            {isFirstTime && (
+              <div style={{ padding: "10px 14px", background: "rgba(59,158,255,0.06)", border: "1px solid #1a2a4a", borderRadius: 8, marginBottom: 16, fontSize: 12, color: "#8bc4ff", lineHeight: 1.6 }}>
+                💡 <strong>Write this passphrase down.</strong> It encrypts all customer data on your device. If forgotten, existing bookings cannot be recovered.
+              </div>
+            )}
+
+            <button type="submit" disabled={loading} style={{ width: "100%", padding: 14, borderRadius: 10, border: "none", fontSize: 16, fontWeight: 700, cursor: loading ? "default" : "pointer", fontFamily: "inherit", background: loading ? "#1e2028" : "linear-gradient(135deg, #1a4a8a, #1a6aff)", color: loading ? "#555" : "#fff", boxShadow: loading ? "none" : "0 4px 16px rgba(26,100,255,0.3)" }}>
+              {loading ? "Decrypting…" : isFirstTime ? "Set Passphrase & Continue" : "Unlock →"}
+            </button>
+          </form>
+        </div>
+
+        <p style={{ textAlign: "center", fontSize: 11, color: "#2a2d36", marginTop: 16 }}>Passphrase held in memory only — never stored or transmitted</p>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, value, onChange, type = "text", full, highlight }) {
+  return (
+    <div style={full ? { gridColumn: "1 / -1" } : {}}>
+      <label style={{...labelStyle, color: highlight ? "#f88" : labelStyle.color}}>{label}{highlight && <span style={{ color: "#f88" }}> *</span>}</label>
+      <input type={type} value={value} onChange={e => onChange(e.target.value)} style={{...inputStyle, border: highlight ? "1.5px solid #ff3a30" : inputStyle.border, boxShadow: highlight ? "0 0 0 1px rgba(255,58,48,0.2)" : "none" }} />
+    </div>
+  );
+}
+
+function AddressField({ label, value, onChange, highlight, mapsReady, speechLang }) {
+  const { useState: ust, useEffect: uef, useCallback: ucb, useRef: ur } = React;
+
+  // Google Places autocomplete state
+  const [suggestions, setSuggestions] = ust([]);
+  const [showSug, setShowSug]         = ust(false);
+  const [activeIdx, setActiveIdx]     = ust(-1);
+  const svcRef     = ur(null);
+  const debounceRef = ur(null);
+  const wrapRef    = ur(null);
+
+  // Whisper recording state: "idle" | "recording" | "processing" | "done" | "error" | "loading"
+  const [recState, setRecState]       = ust("idle");
+  const [whisperMsg, setWhisperMsg]   = ust("");
+  const [loadPct, setLoadPct]         = ust(0);
+  const mediaRecorderRef = ur(null);
+  const audioChunksRef   = ur([]);
+  const streamRef        = ur(null);
+
+  // Close autocomplete on outside click
+  uef(() => {
+    const h = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setShowSug(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, []);
+
+  // ── Google Places autocomplete ──
+  const fetchSuggestions = ucb((text) => {
+    if (!mapsReady || !text || text.length < 2) { setSuggestions([]); return; }
+    if (!svcRef.current && window.google) svcRef.current = new window.google.maps.places.AutocompleteService();
+    if (!svcRef.current) return;
+    svcRef.current.getPlacePredictions(
+      { input: text, componentRestrictions: { country: "us" }, types: ["geocode","establishment"] },
+      (results, status) => { if (status === "OK" && results) setSuggestions(results.slice(0, 5)); else setSuggestions([]); }
+    );
+  }, [mapsReady]);
+
+  const handleChange = (v) => {
+    onChange(v); setActiveIdx(-1);
+    clearTimeout(debounceRef.current);
+    if (v.length >= 2) { setShowSug(true); debounceRef.current = setTimeout(() => fetchSuggestions(v), 280); }
+    else { setSuggestions([]); setShowSug(false); }
+  };
+  const selectSuggestion = (desc) => { onChange(desc); setSuggestions([]); setShowSug(false); setActiveIdx(-1); };
+  const handleKeyDown = (e) => {
+    if (!showSug || !suggestions.length) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setActiveIdx(i => Math.min(i+1, suggestions.length-1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActiveIdx(i => Math.max(i-1, 0)); }
+    else if (e.key === "Enter" && activeIdx >= 0) { e.preventDefault(); selectSuggestion(suggestions[activeIdx].description); }
+    else if (e.key === "Escape") { setShowSug(false); }
+  };
+
+  // ── Whisper toggle ──
+  const toggleWhisper = ucb(async () => {
+    // STOP: if currently recording, stop the MediaRecorder
+    if (recState === "recording") {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        mediaRecorderRef.current.stop();
+      }
+      return;
+    }
+    // START: request mic and begin recording
+    setWhisperMsg(""); setRecState("idle");
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setWhisperMsg("Microphone not available. Please use HTTPS (e.g. Netlify)."); setRecState("error"); return;
+    }
+    if (!window.isSecureContext) {
+      setWhisperMsg("Microphone requires HTTPS."); setRecState("error"); return;
+    }
+
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 16000 } });
+      streamRef.current = stream;
+    } catch(err) {
+      const msg = err.name === "NotAllowedError" ? "Microphone access denied. Allow it in your browser settings." : "Could not access microphone: " + err.message;
+      setWhisperMsg(msg); setRecState("error"); return;
+    }
+
+    audioChunksRef.current = [];
+    // Pick best supported MIME type
+    const mime = ["audio/webm;codecs=opus","audio/webm","audio/ogg;codecs=opus","audio/ogg","audio/mp4",""].find(m => !m || MediaRecorder.isTypeSupported(m)) || "";
+    const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : {});
+    mediaRecorderRef.current = mr;
+
+    mr.ondataavailable = (e) => { if (e.data && e.data.size > 0) audioChunksRef.current.push(e.data); };
+
+    mr.onstop = async () => {
+      // Release microphone immediately
+      stream.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+
+      if (audioChunksRef.current.length === 0) { setRecState("idle"); return; }
+
+      setRecState("processing");
+      setWhisperMsg(WhisperService.isLoaded() ? "Transcribing…" : "Loading model (first use, ~40 MB)…");
+
+      // Track model download progress
+      const unsubProgress = WhisperService.onLoadProgress((pct) => {
+        setLoadPct(pct);
+        if (pct < 100) setWhisperMsg("Downloading model: " + pct + "%");
+        else setWhisperMsg("Transcribing…");
+      });
+
+      try {
+        const blob = new Blob(audioChunksRef.current, { type: mime || "audio/webm" });
+        const lang = (speechLang || "en-US").startsWith("ko") ? "ko" : "en";
+        const text = await WhisperService.transcribe(blob);
+        unsubProgress();
+        if (text && text.length > 0) {
+          onChange(text);
+          setWhisperMsg("✓ Filled");
+          setRecState("done");
+          setTimeout(() => { setRecState("idle"); setWhisperMsg(""); }, 2500);
+        } else {
+          setWhisperMsg("Nothing detected — try again."); setRecState("error");
+          setTimeout(() => { setRecState("idle"); setWhisperMsg(""); }, 3000);
+        }
+      } catch(err) {
+        unsubProgress();
+        setWhisperMsg("Transcription error — check internet connection (model download needed once)."); setRecState("error");
+        setTimeout(() => { setRecState("idle"); setWhisperMsg(""); }, 4000);
+      }
+    };
+
+    mr.start(250); // collect data every 250ms for reliability
+    setRecState("recording");
+    setWhisperMsg("Recording… tap again to stop");
+  }, [recState, onChange, speechLang]);
+
+  // Colour coding for mic button states
+  const micBg      = recState === "recording" ? "#ff3a30" : recState === "processing" ? "#1a3a5a" : recState === "done" ? "#1a4a2a" : "#0d0e12";
+  const micBorder  = recState === "recording" ? "#ff3a30" : recState === "processing" ? "#1a4a8a" : recState === "done" ? "#1a6a3a" : "#2a2d36";
+  const micIcon    = recState === "recording" ? "⏹" : recState === "processing" ? "⏳" : recState === "done" ? "✓" : "🎤";
+  const micPulse   = recState === "recording" ? "pulse 1s infinite" : "none";
+  const micTitle   = recState === "recording" ? "Recording — tap to stop" : recState === "processing" ? "Processing audio…" : recState === "done" ? "Done!" : "Tap to speak address (HIPAA-compliant, on-device)";
+
+  return (
+    <div ref={wrapRef} style={{ gridColumn: "1 / -1", position: "relative" }}>
+      {/* Label row */}
+      <div style={{ display: "flex", alignItems: "center", marginBottom: 4, gap: 6 }}>
+        <label style={{...labelStyle, marginBottom: 0, flex: 1, color: highlight ? "#f88" : labelStyle.color}}>
+          {label}{highlight && <span style={{ color: "#f88" }}> *</span>}
+          {mapsReady && <span style={{ fontSize: 10, color: "#3a6a3a", marginLeft: 6, fontWeight: 400 }}>📍 Maps</span>}
+        </label>
+        {/* HIPAA badge */}
+        <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "rgba(59,158,255,0.07)", color: "#3a6a9a", border: "1px solid #1a2a3a", fontWeight: 700, letterSpacing: "0.05em", flexShrink: 0 }}>HIPAA</span>
+        {/* Mic toggle button */}
+        <button
+          onClick={toggleWhisper}
+          disabled={recState === "processing"}
+          title={micTitle}
+          style={{
+            width: 30, height: 30, borderRadius: "50%", flexShrink: 0,
+            border: "1.5px solid " + micBorder,
+            background: micBg,
+            color: recState === "idle" ? "#999" : "#fff",
+            fontSize: 14, cursor: recState === "processing" ? "default" : "pointer",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            animation: micPulse, transition: "all 0.2s",
+            boxShadow: recState === "recording" ? "0 0 8px rgba(255,58,48,0.5)" : "none"
+          }}
+        >{micIcon}</button>
+      </div>
+
+      {/* Input */}
+      <input
+        type="text" value={value}
+        onChange={e => handleChange(e.target.value)}
+        onKeyDown={handleKeyDown}
+        onFocus={() => { if (value.length >= 2 && suggestions.length) setShowSug(true); }}
+        placeholder={
+          recState === "recording" ? "🔴 Recording — tap ⏹ to stop…"
+          : recState === "processing" ? "⏳ Transcribing on-device…"
+          : mapsReady ? "Type or speak address…"
+          : "Enter address"
+        }
+        autoComplete="off"
+        style={{
+          ...inputStyle,
+          border: recState === "recording" ? "1.5px solid #ff3a30"
+            : recState === "processing" ? "1.5px solid #1a4a8a"
+            : recState === "done" ? "1.5px solid #1a6a3a"
+            : highlight ? "1.5px solid #ff3a30" : inputStyle.border,
+          boxShadow: recState === "recording" ? "0 0 0 2px rgba(255,58,48,0.15)"
+            : recState === "processing" ? "0 0 0 2px rgba(59,158,255,0.1)"
+            : highlight ? "0 0 0 1px rgba(255,58,48,0.2)" : "none",
+          transition: "all 0.2s"
+        }}
+      />
+
+      {/* Status / progress bar */}
+      {whisperMsg && (
+        <div style={{ marginTop: 5, display: "flex", alignItems: "center", gap: 8 }}>
+          {recState === "processing" && loadPct > 0 && loadPct < 100 && (
+            <div style={{ flex: 1, height: 3, background: "#1e2028", borderRadius: 2, overflow: "hidden" }}>
+              <div style={{ height: "100%", width: loadPct + "%", background: "linear-gradient(90deg, #3b9eff, #6bc4ff)", borderRadius: 2, transition: "width 0.3s" }} />
+            </div>
+          )}
+          <p style={{
+            fontSize: 11, margin: 0,
+            color: recState === "error" ? "#f88" : recState === "done" ? "#6c6" : recState === "recording" ? "#ff6b35" : "#888"
+          }}>{whisperMsg}</p>
+        </div>
+      )}
+
+      {/* Google Places suggestions */}
+      {showSug && suggestions.length > 0 && (
+        <div style={{
+          position: "absolute", top: "100%", left: 0, right: 0, zIndex: 300,
+          background: "#1a1c22", border: "1px solid #2a2d36", borderRadius: 8,
+          marginTop: 3, boxShadow: "0 8px 24px rgba(0,0,0,0.7)", overflow: "hidden"
+        }}>
+          {suggestions.map((s, i) => {
+            const main = s.structured_formatting ? s.structured_formatting.main_text : s.description.split(",")[0];
+            const secondary = s.structured_formatting ? s.structured_formatting.secondary_text : s.description.split(",").slice(1).join(",").trim();
+            return (
+              <div key={s.place_id} onMouseDown={() => selectSuggestion(s.description)}
+                style={{ padding: "10px 14px", cursor: "pointer", borderBottom: i < suggestions.length - 1 ? "1px solid #1e2028" : "none",
+                  background: i === activeIdx ? "rgba(255,107,53,0.1)" : "transparent", display: "flex", alignItems: "flex-start", gap: 10 }}>
+                <span style={{ fontSize: 16, marginTop: 1, flexShrink: 0 }}>📍</span>
+                <div style={{ overflow: "hidden" }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: i === activeIdx ? "#ff6b35" : "#e8e6e1", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{main}</div>
+                  {secondary && <div style={{ fontSize: 12, color: "#777", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{secondary}</div>}
+                </div>
+              </div>
+            );
+          })}
+          <div style={{ padding: "5px 10px", background: "#12141a", display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
+            <img src="https://maps.gstatic.com/mapfiles/api-3/images/google_logo.png" alt="Google" style={{ height: 12, opacity: 0.5 }} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+function Badge({ label, ok, neutral }) {
+  return (
+    <span style={{ padding: "3px 10px", borderRadius: 4, fontSize: 12, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", background: neutral ? "rgba(150,150,150,0.1)" : ok ? "rgba(80,200,80,0.1)" : "rgba(255,80,80,0.1)", color: neutral ? "#888" : ok ? "#6c6" : "#f66", border: `1px solid ${neutral ? "#333" : ok ? "#1a3a1a" : "#3a1a1a"}` }}>
+      {label}
+    </span>
+  );
+}
+
+function BookingSection({ title, bookings, onEdit, onDelete }) {
+  if (!bookings.length) return null;
+
+  // Group by date+time for cluster display
+  const groups = {};
+  bookings.forEach(b => {
+    const key = `${b.date}|${b.timeSlot}`;
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(b);
+  });
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, padding: "8px 12px", background: "linear-gradient(90deg, rgba(255,58,48,0.08), transparent)", borderRadius: 8, borderLeft: "3px solid #ff3a30" }}>
+        <h3 style={{ fontSize: 15, fontWeight: 700, color: "#fff" }}>{title}</h3>
+        <span style={{ fontSize: 13, color: "#aaa", marginLeft: "auto" }}>{bookings.length} bookings</span>
+      </div>
+
+      {Object.entries(groups).map(([key, cluster]) => (
+        <div key={key} style={{ marginBottom: 8 }}>
+          {cluster.length > 1 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 12px", marginBottom: 4 }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: "#ff6b35", background: "rgba(255,107,53,0.1)", padding: "2px 8px", borderRadius: 4 }}>⏱ {cluster.length} SAME SLOT</span>
+              <span style={{ fontSize: 12, color: "#999" }}>{cluster[0].date} @ {cluster[0].timeSlot}</span>
+            </div>
+          )}
+          {cluster.map(b => <BookingCard key={b.id} booking={b} onEdit={onEdit} onDelete={onDelete} isCluster={cluster.length > 1} />)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function BookingCard({ booking: b, onEdit, onDelete, isCluster }) {
+  const dayName = DAYS[new Date(b.date + "T12:00:00").getDay()];
+  return (
+    <div style={{ background: "#12141a", border: `1px solid ${isCluster ? "#2a1a10" : "#1e2028"}`, borderRadius: 10, padding: 14, marginBottom: 6, borderLeft: isCluster ? "3px solid #ff6b35" : "3px solid #1e2028" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 14, fontWeight: 700, color: "#fff" }}>{b.date}</span>
+          <span style={{ fontSize: 13, color: "#aaa" }}>{dayName}</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", background: "rgba(255,58,48,0.1)", padding: "2px 8px", borderRadius: 4 }}>{b.timeSlot}</span>
+          {b.flightStatus && (
+            <span style={{
+              fontSize: 11, fontWeight: 700, padding: "2px 6px", borderRadius: 4, textTransform: "uppercase", letterSpacing: "0.05em",
+              background: b.flightStatus === "on-time" || b.flightStatus === "landed" ? "rgba(80,200,80,0.12)" : b.flightStatus === "delayed" ? "rgba(255,200,80,0.12)" : b.flightStatus === "cancelled" ? "rgba(255,58,48,0.12)" : "rgba(59,158,255,0.1)",
+              color: b.flightStatus === "on-time" || b.flightStatus === "landed" ? "#8f8" : b.flightStatus === "delayed" ? "#fc6" : b.flightStatus === "cancelled" ? "#f66" : "#8bc4ff",
+              border: `1px solid ${b.flightStatus === "on-time" || b.flightStatus === "landed" ? "#1a3a1a" : b.flightStatus === "delayed" ? "#3a3a1a" : b.flightStatus === "cancelled" ? "#3a1a1a" : "#1a2a4a"}`
+            }}>✈ {b.flightStatus}</span>
+          )}
+        </div>
+        <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+          <button onClick={() => onEdit(b)} style={{ padding: "7px 12px", borderRadius: 6, border: "1px solid #2a2d36", background: "transparent", color: "#bbb", fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>✏️</button>
+          <button onClick={() => {
+            const w = window.open("","_blank","width=420,height=640");
+            const d = b.date ? new Date(b.date+"T12:00:00").toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",year:"numeric"}) : "—";
+            w.document.write('<!DOCTYPE html><html><head><title>Booking Slip</title><style>body{font-family:sans-serif;padding:20px;max-width:380px;margin:0 auto;color:#111;font-size:14px}h2{font-size:17px;margin:0 0 2px}p.sub{font-size:12px;color:#888;margin:0 0 12px}hr{border:none;border-top:1px solid #ddd;margin:10px 0}.row{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f0f0f0}.label{color:#888;font-size:12px;text-transform:uppercase;letter-spacing:.04em}.val{font-weight:600;text-align:right;max-width:220px}.fare{font-size:24px;font-weight:800;color:#b00}.btn{display:block;width:100%;padding:11px;margin-top:14px;background:#b00;color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer;font-family:sans-serif}</style></head><body>');
+            w.document.write('<h2>🚖 Dispatch HQ</h2><p class="sub">Booking Confirmation</p><hr>');
+            w.document.write('<div class="row"><span class="label">Customer</span><span class="val">'+b.customerName+'</span></div>');
+            w.document.write('<div class="row"><span class="label">Phone</span><span class="val">'+b.phone+'</span></div>');
+            w.document.write('<div class="row"><span class="label">Pickup</span><span class="val">'+b.pickupAddress+'</span></div>');
+            w.document.write('<div class="row"><span class="label">Dropoff</span><span class="val">'+b.dropoffAddress+'</span></div>');
+            if (b.airline) w.document.write('<div class="row"><span class="label">Flight</span><span class="val">'+b.airline+' '+b.flightNumber+'</span></div>');
+            w.document.write('<div class="row"><span class="label">Date</span><span class="val">'+d+'</span></div>');
+            w.document.write('<div class="row"><span class="label">Time</span><span class="val">'+b.timeSlot+'</span></div>');
+            w.document.write('<div class="row"><span class="label">Driver</span><span class="val">#'+b.driverNumber+'</span></div>');
+            w.document.write('<div class="row"><span class="label">Passengers</span><span class="val">'+b.passengers+' pax · '+b.luggage+' bags</span></div>');
+            w.document.write('<div class="row"><span class="label">Trip Type</span><span class="val">'+(b.tripType==="round-trip"?"Round Trip":"One Way")+'</span></div>');
+            w.document.write('<div class="row"><span class="label">Payment</span><span class="fare">$'+b.paymentAmount+'</span></div>');
+            w.document.write('<button class="btn" onclick="window.print()">🖨 Print Slip</button>');
+            w.document.write('<p style="font-size:11px;color:#bbb;margin-top:12px;text-align:center">Generated '+new Date().toLocaleString()+'</p>');
+            w.document.write('</body></html>');
+            w.document.close();
+          }} style={{ padding: "4px 8px", borderRadius: 4, border: "1px solid #2a2d36", background: "transparent", color: "#bbb", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }} title="Print booking slip">🖨</button>
+          <button onClick={() => onDelete(b.id)} style={{ padding: "7px 12px", borderRadius: 6, border: "1px solid #3a1a1a", background: "transparent", color: "#f66", fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>🗑</button>
+        </div>
+      </div>
+      <div className="booking-card-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "4px 12px", fontSize: 14 }}>
+        <span style={{ background: "rgba(255,107,53,0.1)", border: "1px solid rgba(255,107,53,0.25)", borderRadius: 6, padding: "2px 8px", fontSize: 13, fontWeight: 800, color: "#ff6b35" }}>🚗 #{b.driverNumber || "–"}</span>
+        <span style={{ color: "#aaa", fontFamily: "'Noto Sans KR', monospace" }}>👤 <span style={{ color: "#ddd" }}>{b.customerName}</span></span>
+        <span style={{ color: "#aaa" }}>📞 <span style={{ color: "#bbb" }}>{b.phone || "–"}</span></span>
+        <span style={{ color: "#aaa", gridColumn: "1/3" }}>📍 <span style={{ color: "#aaa" }}>{b.pickupAddress || "–"}</span> → <span style={{ color: "#aaa" }}>{b.dropoffAddress || "–"}</span></span>
+        <span style={{ color: "#aaa" }}>{b.tripType === "round-trip" ? "⇄ Round" : "→ One-Way"}</span>
+        <span style={{ color: "#aaa" }}>✈ <span style={{ color: "#bbb" }}>{b.airline || "–"}</span> {b.flightNumber || ""}{b.flightArrival ? <span style={{ color: "#8bc4ff", fontSize: 12 }}> ETA {b.flightArrival}</span> : ""}</span>
+        <span style={{ color: "#aaa" }}>🧑 {b.passengers}p / 🧳 {b.luggage}b</span>
+        <span style={{ color: "#aaa" }}>💰 <span style={{ color: "#4ade80", fontWeight: 600 }}>{b.paymentAmount ? `$${b.paymentAmount}` : "–"}</span>{b.fareBreakdown ? <span style={{ color: "#999", fontSize: 12 }}> ({b.fareBreakdown})</span> : ""}</span>
+      </div>
+    </div>
+  );
+}
+
+// ── Root entry point — GAS auth gate ──
+export default function TaxiDispatcherApp() {
+  return <DispatcherApp />;
+}
