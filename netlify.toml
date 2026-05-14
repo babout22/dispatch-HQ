@@ -1,5 +1,7 @@
 [build]
   publish = "."
 
-[build.environment]
-  NODE_VERSION = "20"
+[[redirects]]
+  from = "/*"
+  to = "/dispatch-hq.html"
+  status = 200
