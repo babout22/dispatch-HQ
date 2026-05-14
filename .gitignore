@@ -2,3 +2,4 @@ node_modules/
 app-for-compile.jsx
 app-compiled.js
 package-lock.json
+google-apps-script.js
