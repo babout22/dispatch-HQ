@@ -274,59 +274,260 @@ function ensureMapsLoaded(apiKey, cb) {
   s.onerror = () => { mapsLoadState = "error"; mapsReadyCbs.forEach(f => f(false)); mapsReadyCbs = []; };
   document.head.appendChild(s);
 }
-const FLAT_RATES = [
-  // Airport ↔ Manhattan
-  { from: "JFK", to: "Manhattan", zone: "Midtown", rate: 70, toll: 0 },
-  { from: "JFK", to: "Manhattan", zone: "Downtown", rate: 65, toll: 0 },
-  { from: "JFK", to: "Manhattan", zone: "Uptown", rate: 75, toll: 0 },
-  { from: "LGA", to: "Manhattan", zone: "Midtown", rate: 40, toll: 0 },
-  { from: "LGA", to: "Manhattan", zone: "Downtown", rate: 50, toll: 0 },
-  { from: "LGA", to: "Manhattan", zone: "Uptown", rate: 35, toll: 0 },
-  { from: "EWR", to: "Manhattan", zone: "Midtown", rate: 80, toll: 15 },
-  { from: "EWR", to: "Manhattan", zone: "Downtown", rate: 75, toll: 15 },
-  { from: "EWR", to: "Manhattan", zone: "Uptown", rate: 85, toll: 15 },
-  // Airport ↔ Boroughs
-  { from: "JFK", to: "Brooklyn", zone: null, rate: 50, toll: 0 },
-  { from: "JFK", to: "Queens", zone: null, rate: 35, toll: 0 },
-  { from: "JFK", to: "Bronx", zone: null, rate: 80, toll: 0 },
-  { from: "JFK", to: "Staten Island", zone: null, rate: 85, toll: 19 },
-  { from: "LGA", to: "Brooklyn", zone: null, rate: 45, toll: 0 },
-  { from: "LGA", to: "Queens", zone: null, rate: 25, toll: 0 },
-  { from: "LGA", to: "Bronx", zone: null, rate: 35, toll: 0 },
-  { from: "EWR", to: "Brooklyn", zone: null, rate: 85, toll: 15 },
-  { from: "EWR", to: "Queens", zone: null, rate: 80, toll: 15 },
-  { from: "EWR", to: "Bronx", zone: null, rate: 90, toll: 15 },
-  // Airport ↔ NJ/CT/Suburbs
-  { from: "JFK", to: "New Jersey", zone: "North NJ", rate: 100, toll: 15 },
-  { from: "JFK", to: "New Jersey", zone: "Central NJ", rate: 120, toll: 15 },
-  { from: "JFK", to: "Connecticut", zone: "Stamford", rate: 140, toll: 0 },
-  { from: "JFK", to: "Connecticut", zone: "Hartford", rate: 250, toll: 0 },
-  { from: "JFK", to: "Long Island", zone: "Nassau", rate: 60, toll: 0 },
-  { from: "JFK", to: "Long Island", zone: "Suffolk", rate: 90, toll: 0 },
-  { from: "JFK", to: "Westchester", zone: null, rate: 95, toll: 0 },
-  { from: "LGA", to: "New Jersey", zone: "North NJ", rate: 80, toll: 15 },
-  { from: "LGA", to: "Connecticut", zone: "Stamford", rate: 110, toll: 0 },
-  { from: "LGA", to: "Long Island", zone: "Nassau", rate: 55, toll: 0 },
-  { from: "LGA", to: "Westchester", zone: null, rate: 65, toll: 0 },
-  { from: "EWR", to: "New Jersey", zone: "North NJ", rate: 55, toll: 0 },
-  { from: "EWR", to: "New Jersey", zone: "Central NJ", rate: 75, toll: 0 },
-  { from: "EWR", to: "Connecticut", zone: "Stamford", rate: 150, toll: 15 },
-  { from: "EWR", to: "Long Island", zone: "Nassau", rate: 100, toll: 15 },
-  // Airport ↔ Airport
-  { from: "JFK", to: "LGA", zone: null, rate: 45, toll: 0 },
-  { from: "JFK", to: "EWR", zone: null, rate: 90, toll: 15 },
-  { from: "LGA", to: "EWR", zone: null, rate: 80, toll: 15 },
-  // Koreatown / Flushing specific
-  { from: "JFK", to: "Flushing", zone: null, rate: 40, toll: 0 },
-  { from: "LGA", to: "Flushing", zone: null, rate: 20, toll: 0 },
-  { from: "EWR", to: "Flushing", zone: null, rate: 90, toll: 15 },
-  { from: "JFK", to: "Fort Lee", zone: null, rate: 95, toll: 15 },
-  { from: "LGA", to: "Fort Lee", zone: null, rate: 60, toll: 15 },
-  { from: "EWR", to: "Fort Lee", zone: null, rate: 50, toll: 0 },
-  { from: "JFK", to: "Palisades Park", zone: null, rate: 95, toll: 15 },
-  { from: "LGA", to: "Palisades Park", zone: null, rate: 60, toll: 15 },
-  { from: "EWR", to: "Palisades Park", zone: null, rate: 55, toll: 0 },
-];
+// ── Complete Price Book (from Gemini-generated pricebook) ──
+const TOWN_PRICES = {
+  // NJ
+  "allendale": { NJ: 75, MHT: 85, LGA: 85, EWR: 85, JFK: 115 },
+  "alpine": { NJ: 40, MHT: 70, LGA: 70, EWR: 70, JFK: 100 },
+  "bayonne": { NJ: 50, MHT: 50, LGA: 75, EWR: 65, JFK: 105 },
+  "beleville": { NJ: 50, MHT: 50, LGA: 75, EWR: 65, JFK: 105 },
+  "bergenfield": { NJ: 20, MHT: 45, LGA: 65, EWR: 55, JFK: 95 },
+  "blauvelt": { NJ: 50, MHT: 55, LGA: 80, EWR: 70, JFK: 100 },
+  "bloomfield": { NJ: 50, MHT: 55, LGA: 80, EWR: 70, JFK: 100 },
+  "bogota": { NJ: 20, MHT: 40, LGA: 65, EWR: 55, JFK: 85 },
+  "caldwell": { NJ: 50, MHT: 60, LGA: 85, EWR: 75, JFK: 105 },
+  "carlstadt": { NJ: 35, MHT: 45, LGA: 70, EWR: 60, JFK: 90 },
+  "cliffside park": { NJ: 15, MHT: 40, LGA: 50, EWR: 40, JFK: 70 },
+  "clifton": { NJ: 40, MHT: 50, LGA: 75, EWR: 65, JFK: 95 },
+  "closter": { NJ: 30, MHT: 70, LGA: 70, EWR: 60, JFK: 100 },
+  "cresskill": { NJ: 30, MHT: 70, LGA: 70, EWR: 60, JFK: 100 },
+  "demarest": { NJ: 30, MHT: 70, LGA: 70, EWR: 60, JFK: 100 },
+  "dover": { NJ: 75, MHT: 80, LGA: 105, EWR: 95, JFK: 105 },
+  "dumont": { NJ: 40, MHT: 70, LGA: 70, EWR: 70, JFK: 100 },
+  "east brunswick": { NJ: 75, MHT: 80, LGA: 105, EWR: 95, JFK: 125 },
+  "east orange": { NJ: 50, MHT: 55, LGA: 80, EWR: 70, JFK: 100 },
+  "e.rutherford": { NJ: 30, MHT: 40, LGA: 65, EWR: 55, JFK: 85 },
+  "east rutherford": { NJ: 30, MHT: 40, LGA: 65, EWR: 55, JFK: 85 },
+  "edgewater": { NJ: 15, MHT: 60, LGA: 60, EWR: 50, JFK: 90 },
+  "edison": { NJ: 70, MHT: 70, LGA: 95, EWR: 85, JFK: 105 },
+  "elizabeth": { NJ: 50, MHT: 55, LGA: 80, EWR: 70, JFK: 100 },
+  "elmwood park": { NJ: 40, MHT: 50, LGA: 75, EWR: 65, JFK: 95 },
+  "emerson": { NJ: 40, MHT: 50, LGA: 75, EWR: 65, JFK: 95 },
+  "englewood": { NJ: 15, MHT: 60, LGA: 60, EWR: 50, JFK: 90 },
+  "englewood cliff": { NJ: 15, MHT: 40, LGA: 60, EWR: 50, JFK: 90 },
+  "englewood cliffs": { NJ: 15, MHT: 40, LGA: 60, EWR: 50, JFK: 90 },
+  "fairfield": { NJ: 55, MHT: 60, LGA: 85, EWR: 75, JFK: 105 },
+  "fair lawn": { NJ: 30, MHT: 50, LGA: 75, EWR: 65, JFK: 95 },
+  "fairlawn": { NJ: 30, MHT: 50, LGA: 75, EWR: 65, JFK: 95 },
+  "fair view": { NJ: 15, MHT: 40, LGA: 60, EWR: 50, JFK: 80 },
+  "fairview": { NJ: 15, MHT: 40, LGA: 60, EWR: 50, JFK: 80 },
+  "fort lee": { NJ: 10, MHT: 50, LGA: 50, EWR: 40, JFK: 70 },
+  "franklin lakes": { NJ: 55, MHT: 80, LGA: 80, EWR: 70, JFK: 110 },
+  "freehold": { NJ: 100, MHT: 105, LGA: 130, EWR: 120, JFK: 150 },
+  "garfield": { NJ: 35, MHT: 45, LGA: 65, EWR: 55, JFK: 95 },
+  "glen rock": { NJ: 40, MHT: 80, LGA: 80, EWR: 80, JFK: 110 },
+  "guttenberg": { NJ: 40, MHT: 50, LGA: 75, EWR: 65, JFK: 95 },
+  "hackensack": { NJ: 25, MHT: 65, LGA: 65, EWR: 55, JFK: 95 },
+  "harrington park": { NJ: 40, MHT: 45, LGA: 80, EWR: 80, JFK: 110 },
+  "hasbrook hts.": { NJ: 30, MHT: 50, LGA: 75, EWR: 65, JFK: 95 },
+  "hasbrouck heights": { NJ: 30, MHT: 50, LGA: 75, EWR: 65, JFK: 95 },
+  "haworth": { NJ: 40, MHT: 45, LGA: 75, EWR: 65, JFK: 95 },
+  "hillsdale": { NJ: 40, MHT: 50, LGA: 75, EWR: 65, JFK: 95 },
+  "hillside": { NJ: 45, MHT: 50, LGA: 75, EWR: 50, JFK: 80 },
+  "hoboken": { NJ: 45, MHT: 55, LGA: 70, EWR: 60, JFK: 90 },
+  "ho-ho-kus": { NJ: 50, MHT: 40, LGA: 80, EWR: 80, JFK: 120 },
+  "hohokus": { NJ: 50, MHT: 40, LGA: 80, EWR: 80, JFK: 120 },
+  "holmdel": { NJ: 90, MHT: 90, LGA: 115, EWR: 105, JFK: 135 },
+  "jersey city": { NJ: 40, MHT: 40, LGA: 65, EWR: 55, JFK: 85 },
+  "kinnelon": { MHT: 75, LGA: 100, EWR: 90, JFK: 120 },
+  "ledgewood": { NJ: 85, MHT: 90, LGA: 115, EWR: 105, JFK: 135 },
+  "leonia": { NJ: 10, MHT: 50, LGA: 50, EWR: 50, JFK: 80 },
+  "lincoln park": { NJ: 60, MHT: 65, LGA: 90, EWR: 80, JFK: 110 },
+  "little ferry": { NJ: 15, MHT: 40, LGA: 60, EWR: 50, JFK: 80 },
+  "livingston": { NJ: 60, MHT: 60, LGA: 100, EWR: 75, JFK: 150 },
+  "lodi": { NJ: 35, MHT: 45, LGA: 70, EWR: 60, JFK: 90 },
+  "lyndhurst": { NJ: 40, MHT: 40, LGA: 65, EWR: 55, JFK: 95 },
+  "madison": { NJ: 65, MHT: 70, LGA: 95, EWR: 85, JFK: 115 },
+  "mahwah": { NJ: 60, MHT: 65, LGA: 90, EWR: 80, JFK: 120 },
+  "maywood": { NJ: 35, MHT: 45, LGA: 70, EWR: 60, JFK: 100 },
+  "millburn": { NJ: 60, MHT: 55, LGA: 80, EWR: 70, JFK: 100 },
+  "montclair": { NJ: 50, MHT: 55, LGA: 80, EWR: 70, JFK: 120 },
+  "montvale": { NJ: 55, MHT: 60, LGA: 75, EWR: 65, JFK: 95 },
+  "montville": { NJ: 65, MHT: 70, LGA: 95, EWR: 85, JFK: 115 },
+  "moonachie": { NJ: 20, MHT: 40, LGA: 65, EWR: 55, JFK: 85 },
+  "morristown": { NJ: 70, MHT: 75, LGA: 100, EWR: 90, JFK: 120 },
+  "nanuet": { NJ: 60, MHT: 65, LGA: 90, EWR: 80, JFK: 110 },
+  "newark": { NJ: 50, MHT: 50, LGA: 75, EWR: 65, JFK: 95 },
+  "new brunswick": { NJ: 80, MHT: 80, LGA: 105, EWR: 95, JFK: 125 },
+  "new milford": { NJ: 35, MHT: 45, LGA: 65, EWR: 55, JFK: 85 },
+  "new port": { NJ: 45, MHT: 40, LGA: 65, EWR: 55, JFK: 85 },
+  "north arlington": { NJ: 45, MHT: 50, LGA: 75, EWR: 65, JFK: 95 },
+  "north bergen": { NJ: 20, MHT: 40, LGA: 65, EWR: 55, JFK: 85 },
+  "north brunswick": { NJ: 75, MHT: 80, LGA: 105, EWR: 95, JFK: 125 },
+  "north caldwell": { NJ: 55, MHT: 60, LGA: 85, EWR: 75, JFK: 105 },
+  "n.plainfield": { NJ: 90, MHT: 75, LGA: 100, EWR: 95, JFK: 120 },
+  "northvale": { NJ: 45, MHT: 55, LGA: 80, EWR: 70, JFK: 100 },
+  "norwood": { NJ: 40, MHT: 50, LGA: 75, EWR: 65, JFK: 95 },
+  "nutley": { NJ: 50, MHT: 45, LGA: 80, EWR: 70, JFK: 100 },
+  "nyack": { NJ: 60, MHT: 65, LGA: 90, EWR: 80, JFK: 110 },
+  "oakland": { NJ: 55, MHT: 60, LGA: 85, EWR: 75, JFK: 105 },
+  "old tappan": { NJ: 45, MHT: 55, LGA: 80, EWR: 70, JFK: 100 },
+  "oradell": { NJ: 40, MHT: 50, LGA: 75, EWR: 65, JFK: 95 },
+  "orange": { NJ: 60, MHT: 55, LGA: 80, EWR: 70, JFK: 70 },
+  "palisades park": { NJ: 10, MHT: 35, LGA: 50, EWR: 40, JFK: 70 },
+  "paramus": { NJ: 35, MHT: 45, LGA: 65, EWR: 55, JFK: 85 },
+  "park ridge": { NJ: 50, MHT: 55, LGA: 80, EWR: 70, JFK: 100 },
+  "parsippany": { NJ: 60, MHT: 70, LGA: 85, EWR: 75, JFK: 105 },
+  "passaic": { NJ: 45, MHT: 50, LGA: 75, EWR: 65, JFK: 95 },
+  "paterson": { NJ: 45, MHT: 50, LGA: 75, EWR: 65, JFK: 95 },
+  "pine brook": { NJ: 70, MHT: 75, LGA: 100, EWR: 90, JFK: 120 },
+  "plainfield": { NJ: 70, MHT: 75, LGA: 100, EWR: 90, JFK: 120 },
+  "princeton": { NJ: 105, MHT: 105, LGA: 145, EWR: 135, JFK: 165 },
+  "rahway": { NJ: 55, MHT: 65, LGA: 90, EWR: 80, JFK: 110 },
+  "ramsey": { NJ: 60, MHT: 60, LGA: 85, EWR: 75, JFK: 105 },
+  "ridgefield": { NJ: 10, MHT: 35, LGA: 50, EWR: 40, JFK: 70 },
+  "ridgefield park": { NJ: 15, MHT: 40, LGA: 50, EWR: 40, JFK: 70 },
+  "ridgewood": { NJ: 35, MHT: 50, LGA: 75, EWR: 65, JFK: 95 },
+  "riveredge": { NJ: 40, MHT: 45, LGA: 70, EWR: 60, JFK: 90 },
+  "river edge": { NJ: 40, MHT: 45, LGA: 70, EWR: 60, JFK: 90 },
+  "rochelle park": { NJ: 35, MHT: 45, LGA: 70, EWR: 60, JFK: 90 },
+  "rockaway": { NJ: 65, MHT: 70, LGA: 100, EWR: 90, JFK: 120 },
+  "rockleigh": { NJ: 45, MHT: 50, LGA: 75, EWR: 65, JFK: 95 },
+  "rutherford": { NJ: 35, MHT: 40, LGA: 65, EWR: 55, JFK: 85 },
+  "saddle brook": { NJ: 35, MHT: 45, LGA: 70, EWR: 60, JFK: 90 },
+  "saddle river": { NJ: 50, MHT: 55, LGA: 80, EWR: 70, JFK: 100 },
+  "secaucus": { NJ: 35, MHT: 40, LGA: 65, EWR: 55, JFK: 85 },
+  "six flag": { NJ: 120 },
+  "spring valley": { NJ: 85, MHT: 85, LGA: 110, EWR: 100, JFK: 130 },
+  "summit": { NJ: 65, MHT: 65, LGA: 90, EWR: 80, JFK: 110 },
+  "teaneck": { NJ: 20, MHT: 40, LGA: 60, EWR: 50, JFK: 80 },
+  "tenafly": { NJ: 30, MHT: 45, LGA: 65, EWR: 55, JFK: 85 },
+  "teterboro": { NJ: 20, MHT: 40, LGA: 65, EWR: 55, JFK: 85 },
+  "totowa": { NJ: 50, MHT: 55, LGA: 80, EWR: 70, JFK: 100 },
+  "towaco": { NJ: 65, MHT: 60, LGA: 95, EWR: 85, JFK: 115 },
+  "trenton": { NJ: 120, MHT: 120, LGA: 145, EWR: 135, JFK: 165 },
+  "union": { NJ: 50, MHT: 55, LGA: 80, EWR: 70, JFK: 100 },
+  "union city": { NJ: 35, MHT: 40, LGA: 65, EWR: 55, JFK: 85 },
+  "upper saddle river": { NJ: 55, MHT: 60, LGA: 85, EWR: 75, JFK: 105 },
+  "waldwick": { NJ: 50, MHT: 55, LGA: 80, EWR: 70, JFK: 100 },
+  "wallington": { NJ: 35, MHT: 45, LGA: 70, EWR: 60, JFK: 90 },
+  "washington twp": { NJ: 45, MHT: 50, LGA: 75, EWR: 65, JFK: 95 },
+  "watchung": { NJ: 75, MHT: 75, LGA: 100, EWR: 90, JFK: 120 },
+  "wayne": { NJ: 55, MHT: 60, LGA: 85, EWR: 75, JFK: 115 },
+  "weehawken": { NJ: 35, MHT: 40, LGA: 65, EWR: 55, JFK: 95 },
+  "westfield": { NJ: 65, MHT: 65, LGA: 90, EWR: 80, JFK: 120 },
+  "west new york": { NJ: 30, MHT: 40, LGA: 65, EWR: 55, JFK: 95 },
+  "west orange": { NJ: 55, MHT: 60, LGA: 85, EWR: 75, JFK: 115 },
+  "woodbridge": { NJ: 65, MHT: 70, LGA: 95, EWR: 85, JFK: 125 },
+  "woodcliff lake": { NJ: 50, MHT: 55, LGA: 80, EWR: 70, JFK: 110 },
+  "woodridge": { NJ: 30, MHT: 40, LGA: 65, EWR: 55, JFK: 95 },
+  "wyckoff": { NJ: 50, MHT: 55, LGA: 80, EWR: 70, JFK: 110 },
+  "westwood": { NJ: 45, MHT: 55, LGA: 80, EWR: 70, JFK: 110 },
+  // Manhattan
+  "manhattan": { JFK: 97, LGA: 77, EWR: 115 }, // base + tolls + congestion
+  "midtown": { JFK: 97, LGA: 77, EWR: 115 },
+  "downtown": { JFK: 97, LGA: 77, EWR: 115 },
+  "upper east side": { JFK: 97, LGA: 77, EWR: 115 },
+  "upper west side": { JFK: 97, LGA: 77, EWR: 115 },
+  "harlem": { JFK: 97, LGA: 77, EWR: 115 },
+  // Nassau County
+  "new hyde park": { Flushing: 35, MHT: 65, LGA: 45, JFK: 45, EWR: 95 },
+  "albertson": { Flushing: 40, MHT: 70, LGA: 50, JFK: 50, EWR: 100 },
+  "atlantic beach": { Flushing: 70, MHT: 100, LGA: 80, JFK: 80, EWR: 130 },
+  "baldwin": { Flushing: 60, MHT: 90, LGA: 70, JFK: 70, EWR: 120 },
+  "bellmore": { Flushing: 70, MHT: 100, LGA: 80, JFK: 80, EWR: 130 },
+  "bethpage": { Flushing: 60, MHT: 90, LGA: 70, JFK: 70, EWR: 120 },
+  "cedarhurst": { Flushing: 50, MHT: 80, LGA: 60, JFK: 50, EWR: 110 },
+  "east meadow": { Flushing: 50, MHT: 80, LGA: 60, JFK: 60, EWR: 110 },
+  "elmont": { Flushing: 40, MHT: 70, LGA: 50, JFK: 50, EWR: 100 },
+  "farmingdale": { Flushing: 65, MHT: 95, LGA: 75, JFK: 70, EWR: 125 },
+  "floral park": { Flushing: 30, MHT: 60, LGA: 40, JFK: 40, EWR: 90 },
+  "franklin square": { Flushing: 50, MHT: 80, LGA: 60, JFK: 50, EWR: 110 },
+  "freeport": { Flushing: 60, MHT: 90, LGA: 70, JFK: 70, EWR: 120 },
+  "garden city": { Flushing: 40, MHT: 70, LGA: 50, JFK: 50, EWR: 100 },
+  "glen cove": { Flushing: 60, MHT: 90, LGA: 70, JFK: 70, EWR: 120 },
+  "great neck": { Flushing: 30, MHT: 60, LGA: 40, JFK: 50, EWR: 90 },
+  "hempstead": { Flushing: 45, MHT: 75, LGA: 55, JFK: 55, EWR: 105 },
+  "long beach": { Flushing: 90, MHT: 120, LGA: 100, JFK: 100, EWR: 150 },
+  "lynbrook": { Flushing: 45, MHT: 75, LGA: 65, JFK: 55, EWR: 105 },
+  "manhasset": { Flushing: 35, MHT: 65, LGA: 45, JFK: 55, EWR: 95 },
+  "massapequa": { Flushing: 80, MHT: 110, LGA: 90, JFK: 90, EWR: 140 },
+  "mineola": { Flushing: 40, MHT: 70, LGA: 50, JFK: 50, EWR: 100 },
+  "oceanside": { Flushing: 70, MHT: 100, LGA: 80, JFK: 80, EWR: 130 },
+  "rockville centre": { Flushing: 50, MHT: 80, LGA: 60, JFK: 60, EWR: 110 },
+  "roslyn": { JFK: 60, LGA: 45, EWR: 75, MHT: 75, Flushing: 40 },
+  "roslyn heights": { JFK: 65, LGA: 50, EWR: 80, MHT: 80, Flushing: 45 },
+  "syosset": { Flushing: 60, MHT: 90, LGA: 70, JFK: 70, EWR: 120 },
+  "valley stream": { Flushing: 50, MHT: 80, LGA: 60, JFK: 50, EWR: 110 },
+  "westbury": { Flushing: 50, MHT: 80, LGA: 60, JFK: 60, EWR: 110 },
+  // Suffolk County
+  "bayshore": { Flushing: 80, MHT: 110, LGA: 90, JFK: 90, EWR: 140 },
+  "bay shore": { Flushing: 80, MHT: 110, LGA: 90, JFK: 90, EWR: 140 },
+  // Flushing / Queens local
+  "flushing": { JFK: 20, LGA: 15, EWR: 80, MHT: 50 },
+  "queens": { JFK: 30, LGA: 25, EWR: 85, MHT: 55 },
+  "forest hills": { JFK: 25, LGA: 20, EWR: 85, MHT: 55 },
+  "jackson heights": { JFK: 25, LGA: 20, EWR: 80, MHT: 50 },
+  "elmhurst": { JFK: 25, LGA: 20, EWR: 80, MHT: 50 },
+  "corona": { JFK: 25, LGA: 20, EWR: 80, MHT: 50 },
+  "astoria": { JFK: 30, LGA: 20, EWR: 85, MHT: 55 },
+  "woodside": { JFK: 25, LGA: 20, EWR: 80, MHT: 50 },
+  "bayside": { JFK: 35, LGA: 30, EWR: 90, MHT: 60 },
+  // Brooklyn
+  "brooklyn": { JFK: 40, LGA: 45, EWR: 95, MHT: 65 },
+  // Bronx
+  "bronx": { JFK: 60, LGA: 50, EWR: 100, MHT: 60 },
+  // Staten Island
+  "staten island": { JFK: 60, LGA: 65, EWR: 85, MHT: 80 },
+};
+
+// Airport/anchor detection
+function getAnchorCode(str) {
+  const s = str.toUpperCase().trim();
+  if (s.includes("JFK") || s.includes("KENNEDY")) return "JFK";
+  if (s.includes("LGA") || s.includes("LAGUARDIA") || s.includes("LA GUARDIA")) return "LGA";
+  if (s.includes("NEWARK") || s.includes("EWR")) return "EWR";
+  if (s.includes("FLUSHING")) return "Flushing";
+  if (s.includes("MHT") || s.includes("MANHATTAN") || s.includes("MIDTOWN") ||
+      s.includes("DOWNTOWN") || s.includes("NEW YORK CITY") || s.includes("NYC") ||
+      s.includes("TIMES SQUARE") || s.includes("PENN STATION") || s.includes("GRAND CENTRAL")) {
+    if (!s.includes("MANHATTAN BEACH")) return "MHT";
+  }
+  return null;
+}
+
+// Normalize town name for lookup
+function normalizeTown(str) {
+  return str.toLowerCase().trim().replace(/\s+/g, " ").replace(/[.,#]/g, "");
+}
+
+// Main fare calculator — replaces lookupFlatRate
+function lookupFlatRate(pickup, dropoff) {
+  const pAnchor = getAnchorCode(pickup);
+  const dAnchor = getAnchorCode(dropoff);
+  const anchor = pAnchor || dAnchor;
+  if (!anchor) return null;
+
+  const townStr = normalizeTown(pAnchor ? dropoff : pickup);
+
+  // Sort by length descending to match most specific first
+  const match = Object.keys(TOWN_PRICES)
+    .sort((a, b) => b.length - a.length)
+    .find(town => townStr.includes(town));
+
+  if (!match) return null;
+  const prices = TOWN_PRICES[match];
+  const base = prices[anchor];
+  if (!base) return null;
+
+  let fare = base;
+  let breakdown = match + " → " + anchor;
+
+  // EWR surcharge
+  if (anchor === "EWR") {
+    const isNJ = "NJ" in prices;
+    if (isNJ) {
+      fare += 14;
+      breakdown += " +$14 toll";
+    } else {
+      fare += 54; // $45 toll + $9 congestion
+      breakdown += " +$54 tolls";
+    }
+  }
+
+  return { fare, route: pickup + " → " + dropoff, breakdown };
+}
+
 
 // Normalize location text for matching
 function normalizeLocation(text) {
@@ -372,51 +573,8 @@ function getSubZone(text) {
   return null;
 }
 
-function lookupFlatRate(pickup, dropoff) {
-  const from = normalizeLocation(pickup);
-  const to = normalizeLocation(dropoff);
-  if (!from || !to) return { found: false, message: "Could not identify locations" };
 
-  // Direct search
-  const zoneFrom = getSubZone(pickup);
-  const zoneTo = getSubZone(dropoff);
 
-  let match = FLAT_RATES.find(r =>
-    r.from === from && r.to === to && (r.zone === null || r.zone === zoneTo)
-  );
-  // Try reverse direction
-  if (!match) {
-    match = FLAT_RATES.find(r =>
-      r.from === to && r.to === from && (r.zone === null || r.zone === zoneFrom)
-    );
-  }
-  // Broad match without zone
-  if (!match) {
-    match = FLAT_RATES.find(r =>
-      (r.from === from && r.to === to) || (r.from === to && r.to === from)
-    );
-  }
-
-  if (match) {
-    const total = match.rate + (match.toll || 0);
-    return {
-      found: true,
-      baseFare: match.rate,
-      toll: match.toll,
-      total,
-      from: match.from,
-      to: match.to,
-      zone: match.zone,
-      message: `${match.from} → ${match.to}${match.zone ? ` (${match.zone})` : ""}: $${match.rate}${match.toll > 0 ? ` + $${match.toll} toll` : ""} = $${total}`
-    };
-  }
-
-  return {
-    found: false,
-    from, to,
-    message: `No preset rate for ${from} → ${to}. Enter a custom amount.`
-  };
-}
 
 // ── AI Assist Service — Anthropic API with Parallel Tool Calling ──
 const TOOL_DEFINITIONS = [
@@ -462,29 +620,53 @@ async function executeToolCall(toolName, toolInput) {
 
 function executeFare(input) {
   const result = lookupFlatRate(input.pickup_location, input.dropoff_location);
-  if (result.found) {
-    let total = result.total;
-    let surcharges = [];
-    if (input.trip_type === "round-trip") {
-      total = result.baseFare * 2 + result.toll * 2;
-      surcharges.push("Round-trip: x2");
-    }
-    if (input.num_passengers && input.num_passengers >= 5) {
-      const extra = Math.ceil((input.num_passengers - 4) * 10);
-      total += extra;
-      surcharges.push(`Large group (+$${extra})`);
-    }
-    return {
-      found: true,
-      route: `${result.from} → ${result.to}${result.zone ? ` (${result.zone})` : ""}`,
-      base_fare: result.baseFare,
-      toll: result.toll,
-      surcharges: surcharges,
-      total: total,
-      currency: "USD"
-    };
+  if (!result) {
+    return { found: false, message: `No preset rate for this route. Enter a custom amount.` };
   }
-  return { found: false, message: result.message, pickup: result.from, dropoff: result.to };
+
+  let total = result.fare;
+  const surcharges = [];
+  if (result.breakdown) surcharges.push(result.breakdown);
+
+  // Airport pickup fee
+  const pAnchor = getAnchorCode(input.pickup_location || "");
+  const isAirportPickup = pAnchor === "JFK" || pAnchor === "LGA" || pAnchor === "EWR";
+  const dAnchor = getAnchorCode(input.dropoff_location || "");
+  const isAirportTrip = isAirportPickup || dAnchor === "JFK" || dAnchor === "LGA" || dAnchor === "EWR";
+
+  if (isAirportPickup) {
+    total += 5;
+    surcharges.push("+$5 airport pickup");
+  }
+
+  // Passenger/luggage surcharges
+  const pax = parseInt(input.num_passengers) || 1;
+  const bags = parseInt(input.num_luggage) || 0;
+
+  if (isAirportTrip) {
+    if (pax === 4 || pax === 5) { total *= 1.5; surcharges.push("x1.5 (4-5 pax)"); }
+    else if (pax >= 6) { total *= 2.0; surcharges.push("x2 (6+ pax)"); }
+  } else {
+    if (pax > 3) { const extra = (pax - 3) * 10; total += extra; surcharges.push(`+$${extra} extra pax`); }
+    if (bags > 3) { const extra = (bags - 3) * 5; total += extra; surcharges.push(`+$${extra} extra bags`); }
+  }
+
+  // Round trip
+  if (input.trip_type === "round-trip") {
+    total *= 2;
+    surcharges.push("x2 round-trip");
+  }
+
+  total = Math.round(total);
+
+  return {
+    found: true,
+    route: result.route,
+    base_fare: result.fare,
+    surcharges,
+    total,
+    currency: "USD"
+  };
 }
 
 async function executeFlight(input) {
@@ -654,25 +836,30 @@ async function runAIAssist(flightNumber, airline, city, date, pickup, dropoff, t
 
 // ── Driver Database ──
 const DRIVERS = [
-  { id: "08", airportPickup: true, airportDropoff: false, shiftStart: "05:00", shiftEnd: "16:00", daysOff: ["Thursday"], specialShifts: [{ day: "Thursday", start: "05:00", end: "09:00" }], notes: "Thu 5am–9am only" },
-  { id: "10", airportPickup: true, airportDropoff: true, shiftStart: "10:00", shiftEnd: "22:00", daysOff: [], monthlyOff: [9, 19, 29], notes: "Off every 9th, 19th, 29th" },
-  { id: "11", airportPickup: true, airportDropoff: true, shiftStart: "07:00", shiftEnd: "19:00", daysOff: [], notes: "" },
-  { id: "17", airportPickup: true, airportDropoff: true, shiftStart: "06:00", shiftEnd: "22:00", daysOff: ["Wednesday", "Saturday"], notes: "" },
-  { id: "19", airportPickup: true, airportDropoff: true, shiftStart: "04:00", shiftEnd: "00:00", daysOff: [], notes: "" },
-  { id: "20", airportPickup: true, airportDropoff: true, shiftStart: "05:00", shiftEnd: "00:00", daysOff: [], notes: "" },
-  { id: "30", airportPickup: true, airportDropoff: true, shiftStart: "05:00", shiftEnd: "00:00", daysOff: ["Monday", "Friday"], notes: "" },
-  { id: "33", airportPickup: true, airportDropoff: true, shiftStart: "05:00", shiftEnd: "17:00", daysOff: [], notes: "" },
-  { id: "35", airportPickup: true, airportDropoff: false, shiftStart: "10:00", shiftEnd: "00:00", daysOff: ["Tuesday"], notes: "" },
-  { id: "37", airportPickup: true, airportDropoff: true, shiftStart: "10:00", shiftEnd: "19:00", daysOff: ["Monday", "Tuesday"], notes: "" },
-  { id: "45", airportPickup: false, airportDropoff: false, shiftStart: "07:00", shiftEnd: "19:00", daysOff: ["Thursday"], notes: "No airport service" },
-  { id: "50", airportPickup: true, airportDropoff: true, shiftStart: "17:00", shiftEnd: "04:00", daysOff: ["Sunday"], notes: "Night shift (5pm–4am)" },
-  { id: "55", airportPickup: true, airportDropoff: true, shiftStart: "05:00", shiftEnd: "15:00", daysOff: [], notes: "⚠️ No rain/snow days" },
-  { id: "57", airportPickup: true, airportDropoff: true, shiftStart: "08:00", shiftEnd: "18:00", daysOff: ["Wednesday", "Saturday"], notes: "" },
-  { id: "60", airportPickup: false, airportDropoff: false, shiftStart: "07:00", shiftEnd: "22:00", daysOff: ["Wednesday"], notes: "No airport service" },
-  { id: "77", airportPickup: true, airportDropoff: true, shiftStart: "04:00", shiftEnd: "00:00", daysOff: [], notes: "" },
-  { id: "87", airportPickup: true, airportDropoff: true, shiftStart: "04:00", shiftEnd: "18:00", daysOff: ["Sunday"], specialShifts: [{ day: "Wednesday", start: "04:00", end: "12:00" }, { day: "Saturday", start: "04:00", end: "12:00" }], notes: "Wed/Sat: 4am–12pm" },
-  { id: "88", airportPickup: true, airportDropoff: false, shiftStart: "07:00", shiftEnd: "00:00", daysOff: ["Sunday"], notes: "Dropoff Korean-speaking only" },
-  { id: "95", airportPickup: true, airportDropoff: true, shiftStart: "10:00", shiftEnd: "20:00", daysOff: [], notes: "CT-based, limited NYC" },
+  // ── NYC Drivers ──
+  { id: "808", name: "KANG K Y",  carType: "Silver Nissan SUV",         phone: "646-363-3340", airportPickup: true,  airportDropoff: false, shiftStart: "05:00", shiftEnd: "16:00", daysOff: ["Thursday"], specialShifts: [{ day: "Thursday", start: "05:00", end: "09:00" }], notes: "Thu 5am–9am only. No airport dropoff." },
+  { id: "810", name: "SUK",       carType: "Black Kia SUV",             phone: "929-855-6507", airportPickup: true,  airportDropoff: true,  shiftStart: "10:00", shiftEnd: "22:00", daysOff: [], monthlyOff: [9, 19, 29], notes: "Off every 9th, 19th, 29th" },
+  { id: "811", name: "PARK L B",  carType: "Black Toyota Avalon",       phone: "347-992-9014", airportPickup: true,  airportDropoff: true,  shiftStart: "07:00", shiftEnd: "19:00", daysOff: [], notes: "" },
+  { id: "817", name: "KIM K O",   carType: "Silver Honda CRV",          phone: "347-610-1304", airportPickup: true,  airportDropoff: true,  shiftStart: "06:00", shiftEnd: "22:00", daysOff: ["Wednesday", "Saturday"], notes: "" },
+  { id: "819", name: "KANG H D",  carType: "Silver Toyota Sienna",      phone: "929-800-0140", airportPickup: true,  airportDropoff: true,  shiftStart: "04:00", shiftEnd: "00:00", daysOff: [], notes: "" },
+  { id: "820", name: "KANG KJ",   carType: "Black Hyundai Genesis",     phone: "718-909-5556", airportPickup: true,  airportDropoff: true,  shiftStart: "05:00", shiftEnd: "00:00", daysOff: [], notes: "" },
+  { id: "830", name: "KIM JAMES", carType: "Bronze Toyota Sienna",      phone: "347-749-1680", airportPickup: true,  airportDropoff: true,  shiftStart: "05:00", shiftEnd: "00:00", daysOff: ["Monday", "Friday"], notes: "" },
+  { id: "833", name: "KWON S H",  carType: "Silver Toyota Sienna",      phone: "917-621-7724", airportPickup: true,  airportDropoff: true,  shiftStart: "05:00", shiftEnd: "17:00", daysOff: [], notes: "" },
+  { id: "835", name: "YUN G J",   carType: "Black Chevy SUV",           phone: "718-813-7557", airportPickup: true,  airportDropoff: false, shiftStart: "10:00", shiftEnd: "00:00", daysOff: ["Tuesday"], notes: "No airport dropoff." },
+  { id: "837", name: "KIM Y S",   carType: "Black Toyota Highlander",   phone: "718-757-0861", airportPickup: true,  airportDropoff: true,  shiftStart: "10:00", shiftEnd: "19:00", daysOff: ["Monday", "Tuesday"], notes: "" },
+  { id: "845", name: "NO N I",    carType: "Black Lexus SUV",           phone: "917-821-1114", airportPickup: false, airportDropoff: false, shiftStart: "07:00", shiftEnd: "19:00", daysOff: ["Thursday"], notes: "No airport service." },
+  { id: "850", name: "KANG D R",  carType: "Silver Toyota Sienna",      phone: "646-302-4615", airportPickup: true,  airportDropoff: true,  shiftStart: "17:00", shiftEnd: "04:00", daysOff: ["Sunday"], notes: "Night shift (5pm–4am)" },
+  { id: "855", name: "KIM B S",   carType: "Silver Toyota Sienna",      phone: "917-943-7337", airportPickup: true,  airportDropoff: true,  shiftStart: "05:00", shiftEnd: "15:00", daysOff: [], notes: "⚠️ No rain/snow days" },
+  { id: "857", name: "SEO H G",   carType: "Black Honda Odyssey",       phone: "646-331-8785", airportPickup: true,  airportDropoff: true,  shiftStart: "08:00", shiftEnd: "18:00", daysOff: ["Wednesday", "Saturday"], notes: "" },
+  { id: "860", name: "HAN S H",   carType: "Gray Toyota RAV4",          phone: "646-567-8644", airportPickup: false, airportDropoff: false, shiftStart: "07:00", shiftEnd: "22:00", daysOff: ["Wednesday"], notes: "No airport service." },
+  { id: "877", name: "YI BOB",    carType: "White Honda Pilot",         phone: "646-886-6371", airportPickup: true,  airportDropoff: true,  shiftStart: "04:00", shiftEnd: "00:00", daysOff: [], notes: "" },
+  { id: "887", name: "YUN J K",   carType: "White Infiniti SUV",        phone: "917-655-1737", airportPickup: true,  airportDropoff: false, shiftStart: "04:00", shiftEnd: "18:00", daysOff: ["Sunday"], specialShifts: [{ day: "Wednesday", start: "04:00", end: "12:00" }, { day: "Saturday", start: "04:00", end: "12:00" }], notes: "Wed/Sat: 4am–12pm. No airport dropoff." },
+  { id: "888", name: "PARK J G",  carType: "White Toyota Sedan",        phone: "718-813-0448", airportPickup: true,  airportDropoff: false, shiftStart: "07:00", shiftEnd: "00:00", daysOff: ["Sunday"], notes: "No airport dropoff." },
+  { id: "895", name: "LEE S I",   carType: "Black Honda RDX",           phone: "917-359-7779", airportPickup: true,  airportDropoff: true,  shiftStart: "10:00", shiftEnd: "20:00", daysOff: [], notes: "" },
+  // ── NJ Drivers ──
+  { id: "100", name: "YOO S H",   carType: "Gray Dodge Minivan",        phone: "201-286-4668", airportPickup: true,  airportDropoff: true,  shiftStart: "00:00", shiftEnd: "00:00", daysOff: [], notes: "🚗 NJ-based driver · 24hrs" },
+  { id: "500", name: "SONG K Y",  carType: "Black Lexus SUV",           phone: "201-978-3898", airportPickup: true,  airportDropoff: true,  shiftStart: "00:00", shiftEnd: "00:00", daysOff: [], notes: "🚗 NJ-based driver · 24hrs" },
+  { id: "802", name: "OH N S",    carType: "Black Infiniti SUV",        phone: "201-618-3007", airportPickup: true,  airportDropoff: true,  shiftStart: "00:00", shiftEnd: "00:00", daysOff: [], notes: "🚗 NJ-based driver · 24hrs" },
 ];
 
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -700,6 +887,7 @@ function getDriverShift(driver, date) {
 }
 
 function getShiftLabel(driver) {
+  if (driver.shiftStart === "00:00" && driver.shiftEnd === "00:00") return "24hrs";
   const s = parseInt(driver.shiftStart);
   const e = parseInt(driver.shiftEnd);
   if (s >= 17) return "Night";
@@ -1305,9 +1493,6 @@ function DispatcherApp({ session, onLogout }) {
   const [syncConfig, setSyncConfig] = useState(() => loadSyncConfig());
 
   // ── Device encryption passphrase (memory only, never stored) ──
-  const [devicePassphrase, setDevicePassphrase] = useState("");
-  const [deviceBookings, setDeviceBookings]     = useState(null); // null = not yet unlocked
-  const isFirstTime = !localStorage.getItem(ENC_STORAGE_KEY) && !localStorage.getItem(STORAGE_KEY);
 
   // ── Auto-sync ──
   // ── Auth state ──
@@ -1330,8 +1515,6 @@ function DispatcherApp({ session, onLogout }) {
     } catch {}
     try { localStorage.removeItem(AUTH_SESSION_KEY); } catch {}
     setCurrentUser(null);
-    setDevicePassphrase("");   // wipe passphrase from memory on sign-out
-    setDeviceBookings(null);   // require re-unlock on next login
     setAuthStatus("unauthenticated");
   };
 
@@ -1339,14 +1522,14 @@ function DispatcherApp({ session, onLogout }) {
   useEffect(() => {
     const stored = (() => { try { return JSON.parse(localStorage.getItem(AUTH_SESSION_KEY) || "null"); } catch { return null; } })();
     if (!stored || !stored.token || !stored.expiresAt) { setAuthStatus("unauthenticated"); return; }
-    if (new Date(stored.expiresAt) < new Date()) { clearLocalSession(); return; }
+    if (new Date(stored.expiresAt) < new Date()) { clearSession(); return; }
     // Quick local check passes — set authenticated, then verify with server in background
     setCurrentUser(stored);
     setAuthStatus("authenticated");
     if (syncConfig.endpointUrl) {
       fetch(syncConfig.endpointUrl + "?action=validateSession&sessionToken=" + encodeURIComponent(stored.token), { method: "GET", redirect: "follow" })
         .then(r => r.json())
-        .then(d => { if (!d.valid) clearLocalSession(); })
+        .then(d => { if (!d.valid) clearSession(); })
         .catch(() => {}); // network error → keep local session
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1900,7 +2083,7 @@ function DispatcherApp({ session, onLogout }) {
 
     // ── Driver — "driver 19", "기사 08" ──
     const drvMatch = t.match(/(?:driver|기사|드라이버)\s*[#]?\s*(\d{1,2})/i);
-    if (drvMatch) updates.driverNumber = drvMatch[1].padStart(2, "0");
+    if (drvMatch) updates.driverNumber = drvMatch[1].padStart(3, "0");
 
     // ── Name — "name X", "고객 X", or first capitalized words in original text ──
     const nameMatch = t.match(/(?:name\s*(?:is)?|이름\s*(?:은|이)?|customer|고객)\s*[:]?\s*([a-z가-힣][a-z가-힣\s.]{1,30}?)(?=\s*(?:pickup|pick\s*up|phone|from|to|에서|까지|airline|flight|passenger|luggage|편도|왕복|드라이버|driver|at\s+\d|\d{3,}|\$))/i)
@@ -2363,22 +2546,7 @@ Rules:
     );
   }
 
-  // Dispatcher: show passphrase gate if not yet unlocked
-  if (deviceBookings === null) {
-    return (
-      <DevicePassphraseGate
-        isFirstTime={isFirstTime}
-        onUnlocked={(passphrase, bookings) => {
-          setDevicePassphrase(passphrase);
-          // Replace the auto-purge bookings with the decrypted + purged set
-          const purged = BackupService.autoPurgeOldBookings(bookings, 730);
-          setBookings(purged);
-          setDeviceBookings(purged);
-        }}
-      />
-    );
-  }
-
+  // Dispatcher: load bookings directly (local encryption pending user decision)
   return (
     <div style={{ minHeight: "100vh", background: "#0a0b0f", color: "#e8e6e1", fontFamily: "'JetBrains Mono', 'SF Mono', 'Fira Code', monospace" }}>
       <style>{`
@@ -2417,42 +2585,50 @@ Rules:
       `}</style>
 
       {/* ── Header ── */}
-      <header style={{ background: "linear-gradient(135deg, #111318 0%, #161820 100%)", borderBottom: "1px solid #1e2028", padding: "12px 20px", position: "sticky", top: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg, #ff3a30, #ff6b35)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>🚖</div>
+      <header style={{ background: "rgba(6,7,13,0.97)", backdropFilter: "blur(24px)", WebkitBackdropFilter: "blur(24px)", borderBottom: "1px solid var(--border-0)", padding: "0 20px", position: "sticky", top: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "space-between", height: 54 }}>
+        {/* Amber top accent line */}
+        <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "linear-gradient(90deg, var(--amber) 0%, rgba(245,166,35,0.15) 50%, transparent 100%)", pointerEvents: "none" }} />
+        <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
+          <div style={{ width: 29, height: 29, borderRadius: 7, background: "linear-gradient(135deg, #c47a0a, var(--amber))", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, boxShadow: "0 0 18px rgba(245,166,35,0.3)" }}>🚖</div>
           <div>
-            <h1 style={{ fontSize: 16, fontWeight: 700, letterSpacing: "0.05em", color: "#fff", fontFamily: "'JetBrains Mono', monospace" }}>DISPATCH HQ</h1>
-            <p style={{ fontSize: 11, color: "#555", letterSpacing: "0.06em" }}>👤 {session ? session.name : "Dispatcher"}</p>
+            <h1 style={{ fontSize: 20, fontWeight: 400, letterSpacing: "0.24em", color: "var(--white)", fontFamily: "var(--display)", lineHeight: 1 }}>DISPATCH HQ</h1>
+            <p style={{ fontSize: 10, color: "var(--slate-dim)", letterSpacing: "0.1em", fontFamily: "var(--mono)", marginTop: 1 }}>{session ? (session.displayName || session.username).toUpperCase() : "DISPATCHER"}</p>
           </div>
         </div>
-        <nav role="navigation" aria-label="Main tabs" style={{ display: "flex", gap: 4, alignItems: "center", overflowX: "auto", WebkitOverflowScrolling: "touch", msOverflowStyle: "none", scrollbarWidth: "none" }}>
+        <nav role="navigation" aria-label="Main tabs" style={{ display: "flex", gap: 0, alignItems: "center", overflowX: "auto", WebkitOverflowScrolling: "touch", msOverflowStyle: "none", scrollbarWidth: "none", height: 54 }}>
           {syncConfigured && (
-            <span style={{ fontSize: 11, marginRight: 4, color: syncStatus === "syncing" ? "#fc6" : passphrase ? "#4a4" : "#666", display: "flex", alignItems: "center", gap: 3 }}>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: syncStatus === "syncing" ? "#fc6" : passphrase ? "#4a4" : "#555", display: "inline-block", animation: syncStatus === "syncing" ? "pulse 1s infinite" : "none" }} />
-              {syncStatus === "syncing" ? "SYNCING" : passphrase ? "ENCRYPTED" : "LOCKED"}
+            <span style={{ fontSize: 10, marginRight: 14, color: syncStatus === "syncing" ? "var(--amber)" : passphrase ? "var(--green)" : "var(--slate-dim)", display: "flex", alignItems: "center", gap: 5, fontFamily: "var(--mono)", letterSpacing: "0.12em" }}>
+              <span style={{ width: 5, height: 5, borderRadius: "50%", background: syncStatus === "syncing" ? "var(--amber)" : passphrase ? "var(--green)" : "var(--slate-dim)", display: "inline-block", animation: "pulse-dot 1.5s infinite" }} />
+              {syncStatus === "syncing" ? "SYNC" : passphrase ? "LIVE" : "OFF"}
             </span>
           )}
-          {[["booking","📝 Book"],["dashboard","📊 Dash"],["drivers","🚗 Drivers"],["sync","🔐 Sync"],["backup","💾 Backup"]].map(([v, label]) => (
-            <button key={v} onClick={() => setView(v)} style={{ padding: "10px 14px", borderRadius: 8, border: "none", background: view === v ? "linear-gradient(135deg, #ff3a30, #ff6b35)" : "transparent", color: view === v ? "#fff" : "#777", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", letterSpacing: "0.03em", transition: "all 0.2s" }}>{label}</button>
+          {[["booking","BOOK"],["dashboard","DASH"],["drivers","DRIVERS"],["sync","SYNC"],["backup","BACKUP"]].map(([v, label]) => (
+            <button key={v} onClick={() => setView(v)} style={{
+              padding: "0 13px", height: 54, borderRadius: 0, border: "none",
+              borderBottom: view === v ? "2px solid var(--amber)" : "2px solid transparent",
+              borderTop: "2px solid transparent",
+              background: "transparent",
+              color: view === v ? "var(--amber)" : "var(--slate-dim)",
+              fontSize: 11, fontWeight: 700, cursor: "pointer",
+              fontFamily: "var(--mono)", letterSpacing: "0.14em",
+              transition: "color 0.15s, border-color 0.15s", whiteSpace: "nowrap"
+            }}>{label}</button>
           ))}
-          <button onClick={onLogout} title="Sign out" style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #1e2028", background: "transparent", color: "#555", fontSize: 12, cursor: "pointer", fontFamily: "inherit", marginLeft: 4 }}>Sign Out</button>
+          <div style={{ width: 1, height: 18, background: "var(--border-1)", margin: "0 8px" }} />
+          <button onClick={onLogout} style={{ padding: "5px 10px", borderRadius: "var(--r)", border: "1px solid var(--border-0)", background: "transparent", color: "var(--slate-dim)", fontSize: 10, cursor: "pointer", fontFamily: "var(--mono)", letterSpacing: "0.12em", transition: "all 0.15s" }}>EXIT</button>
         </nav>
       </header>
 
-      <main role="main" aria-label="Dispatch HQ Application" style={{ maxWidth: 960, margin: "0 auto", padding: "20px 16px" }}>
+      <main role="main" aria-label="Dispatch HQ Application" style={{ maxWidth: 980, margin: "0 auto", padding: "24px 16px" }}>
 
         {!gdprDismissed && (
-          <div role="alert" style={{ padding: "14px 16px", borderRadius: 12, marginBottom: 16, background: "rgba(59,158,255,0.06)", border: "1px solid #1a2a4a" }}>
-            <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
-              <span style={{ fontSize: 18 }}>🔒</span>
-              <div style={{ flex: 1 }}>
-                <p style={{ fontSize: 14, fontWeight: 700, color: "#8bc4ff", marginBottom: 6 }}>Privacy Notice</p>
-                <p style={{ fontSize: 13, color: "#bbb", lineHeight: 1.5, marginBottom: 4 }}>This app stores customer booking data (names, phone numbers, addresses, flight details, payment amounts) on your device. When you use Cloud Backup, data is encrypted before leaving your device.</p>
-                <p style={{ fontSize: 13, color: "#bbb", lineHeight: 1.5, marginBottom: 4 }}>When you use AI Smart Fill, the booking text you type is sent to Anthropic's API for processing. Do not enter sensitive data beyond what is needed for the booking.</p>
-                <p style={{ fontSize: 12, color: "#999", lineHeight: 1.5 }}>Bookings are kept for 2 years for record-keeping, then automatically removed. You can export or delete all data at any time from the Backup tab.</p>
-              </div>
-              <button onClick={dismissGdpr} style={{ padding: "6px 14px", borderRadius: 6, border: "none", background: "#2255aa", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>OK</button>
+          <div role="alert" style={{ padding: "14px 18px", borderRadius: 10, marginBottom: 20, background: "rgba(61,159,255,0.05)", border: "1px solid rgba(61,159,255,0.15)", display: "flex", alignItems: "flex-start", gap: 12 }}>
+            <span style={{ fontSize: 14, marginTop: 1 }}>🔒</span>
+            <div style={{ flex: 1 }}>
+              <p style={{ fontSize: 13, fontWeight: 600, color: "#3d9fff", marginBottom: 4, fontFamily: "var(--sans)" }}>Privacy Notice</p>
+              <p style={{ fontSize: 14, color: "var(--slate)", lineHeight: 1.6 }}>This app stores customer booking data on your device. Cloud Backup encrypts all data before transmission. AI Smart Fill sends booking text to Anthropic's API — don't include sensitive data beyond what's needed. Bookings auto-purge after 2 years.</p>
             </div>
+            <button onClick={dismissGdpr} style={{ padding: "5px 14px", borderRadius: 6, border: "none", background: "rgba(61,159,255,0.15)", color: "#3d9fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "var(--sans)", flexShrink: 0, whiteSpace: "nowrap" }}>Got it</button>
           </div>
         )}
 
@@ -2460,14 +2636,17 @@ Rules:
         {view === "booking" && (<div role="form" aria-label="New booking form">
           <div className="card-enter">
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
-              <h2 style={{ fontSize: 20, fontWeight: 700, color: "#fff" }}>{editingBooking ? "✏️ Edit Booking" : "📝 New Booking"}</h2>
-              {editingBooking && <button onClick={() => { setEditingBooking(null); setForm({...INIT_FORM}); }} style={{ padding: "6px 14px", background: "#2a2d36", border: "none", borderRadius: 6, color: "#999", fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>Cancel Edit</button>}
+              <div>
+                <h2 style={{ fontSize: 26, fontWeight: 800, color: "var(--white)", fontFamily: "var(--display)", letterSpacing: "-0.01em" }}>{editingBooking ? "Edit Booking" : "New Booking"}</h2>
+                <p style={{ fontSize: 13, color: "var(--slate-dim)", fontFamily: "var(--mono)", letterSpacing: "0.08em", marginTop: 2 }}>{new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }).toUpperCase()}</p>
+              </div>
+              {editingBooking && <button onClick={() => { setEditingBooking(null); setForm({...INIT_FORM}); }} style={{ padding: "7px 16px", background: "var(--bg-2)", border: "1px solid #1c2035", borderRadius: 8, color: "var(--slate)", fontSize: 13, cursor: "pointer", fontFamily: "var(--sans)" }}>Cancel Edit</button>}
             </div>
 
             {/* Date & Time */}
             {/* Date & Time */}
-            <div style={{ background: "#12141a", border: "1px solid #1e2028", borderRadius: 14, padding: 18, marginBottom: 14 }}>
-              <div className="resp-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div style={{ background: "var(--bg-1)", border: "1px solid #1c2035", borderRadius: 12, padding: 18, marginBottom: 12 }}>
+              <div className="resp-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
 
                 {/* ── Custom Calendar Picker ── */}
                 <div style={{ position: "relative" }}>
@@ -2532,8 +2711,8 @@ Rules:
                             return (
                               <button key={i} onClick={() => { if (!isPast) { setForm(p => ({...p, date: dateStr})); setShowCal(false); } }} style={{
                                 padding: "7px 0", borderRadius: 6, border: "none", fontSize: 13, fontFamily: "inherit",
-                                background: isSelected ? "#ff3a30" : isToday ? "rgba(255,107,53,0.15)" : "transparent",
-                                color: isPast ? "#2a2d36" : isSelected ? "#fff" : isToday ? "#ff6b35" : "#ccc",
+                                background: isSelected ? "var(--amber)" : isToday ? "rgba(255,107,53,0.15)" : "transparent",
+                                color: isPast ? "#2a2d36" : isSelected ? "#fff" : isToday ? "var(--amber)" : "#ccc",
                                 cursor: isPast ? "not-allowed" : "pointer",
                                 fontWeight: isSelected || isToday ? 700 : 400,
                                 opacity: isPast ? 0.4 : 1
@@ -2551,7 +2730,7 @@ Rules:
                               <button key={label} onClick={() => { setForm(p => ({...p, date: ds})); setShowCal(false); }} style={{
                                 flex: 1, padding: "6px 0", borderRadius: 6, border: "1px solid #2a2d36",
                                 background: form.date === ds ? "rgba(255,58,48,0.1)" : "transparent",
-                                color: form.date === ds ? "#ff6b35" : "#888", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 600
+                                color: form.date === ds ? "var(--amber)" : "#888", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 600
                               }}>{label}</button>
                             );
                           })}
@@ -2607,7 +2786,7 @@ Rules:
                             }} style={{
                               width: "100%", padding: "9px 16px", border: "none", textAlign: "left",
                               background: isSelected ? "rgba(255,58,48,0.15)" : "transparent",
-                              color: isSelected ? "#ff6b35" : isAM ? "#8bc4ff" : "#ffa366",
+                              color: isSelected ? "var(--amber)" : isAM ? "#8bc4ff" : "#ffa366",
                               fontSize: 14, cursor: "pointer", fontFamily: "inherit",
                               fontWeight: isSelected ? 700 : 400,
                               borderBottom: t.endsWith("AM") && QUICK_TIMES[QUICK_TIMES.indexOf(t)+1]?.includes("PM") ? "1px solid #222" : "none"
@@ -2624,7 +2803,7 @@ Rules:
 
             {/* Customer Info */}
             <div style={{ background: "#12141a", border: "1px solid #1e2028", borderRadius: 14, padding: 18, marginBottom: 14 }}>
-              <p style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", marginBottom: 14, letterSpacing: "0.1em" }}>CUSTOMER INFO</p>
+              <p style={{ fontSize: 14, fontWeight: 700, color: "var(--amber)", marginBottom: 14, letterSpacing: "0.1em" }}>CUSTOMER INFO</p>
               <div className="resp-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 <Field label="Customer Name" value={form.customerName} onChange={v => setForm(p=>({...p,customerName:v}))} full highlight={missingFields.includes("customerName")} />
                 <Field label="Phone Number" value={form.phone} onChange={v => setForm(p=>({...p,phone:v}))} type="tel" highlight={missingFields.includes("phone")} />
@@ -2677,7 +2856,7 @@ Rules:
                   <label style={labelStyle}>Trip Type</label>
                   <div style={{ display: "flex", gap: 6 }}>
                     {["one-way","round-trip"].map(t => (
-                      <button key={t} onClick={() => setForm(p=>({...p,tripType:t}))} style={{ flex: 1, padding: "10px", borderRadius: 8, border: form.tripType === t ? "1px solid #ff3a30" : "1px solid #1e2028", background: form.tripType === t ? "rgba(255,58,48,0.1)" : "#0d0e12", color: form.tripType === t ? "#ff6b35" : "#666", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", textTransform: "capitalize" }}>{t === "one-way" ? "One-Way →" : "Round-Trip ⇄"}</button>
+                      <button key={t} onClick={() => setForm(p=>({...p,tripType:t}))} style={{ flex: 1, padding: "10px", borderRadius: 8, border: form.tripType === t ? "1px solid #ff3a30" : "1px solid #1e2028", background: form.tripType === t ? "rgba(255,58,48,0.1)" : "#0d0e12", color: form.tripType === t ? "var(--amber)" : "#666", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", textTransform: "capitalize" }}>{t === "one-way" ? "One-Way →" : "Round-Trip ⇄"}</button>
                     ))}
                   </div>
                 </div>
@@ -2703,7 +2882,7 @@ Rules:
                 {isStandaloneMode() && !aiLoading && !aiError && (
                 <div style={{ fontSize: 12, color: "#bbb", background: "rgba(255,200,80,0.06)", padding: "6px 10px", borderRadius: 6, border: "1px solid #3a3a1a" }}>
                   <span>Website mode — AI flight lookup unavailable. </span>
-                  <a href={form.flightNumber ? `https://flightaware.com/live/flight/${form.flightNumber.trim()}` : "https://flightaware.com"} target="_blank" rel="noopener noreferrer" style={{ color: "#ff6b35", fontWeight: 700, textDecoration: "none" }}>Check on FlightAware ↗</a>
+                  <a href={form.flightNumber ? `https://flightaware.com/live/flight/${form.flightNumber.trim()}` : "https://flightaware.com"} target="_blank" rel="noopener noreferrer" style={{ color: "var(--amber)", fontWeight: 700, textDecoration: "none" }}>Check on FlightAware ↗</a>
                 </div>
               )}
               {aiLoading && <span style={{ fontSize: 12, color: "#fc6", animation: "pulse 1s infinite" }}>⏳ Searching... ({aiTimer}s)</span>}
@@ -2794,7 +2973,7 @@ Rules:
                     </div>
                     <div style={{ fontSize: 16, color: "#777" }}>→</div>
                     <div style={{ textAlign: "center" }}>
-                      <p style={{ fontSize: 18, fontWeight: 700, color: "#ff6b35" }}>{flightData.destination_code || "---"}</p>
+                      <p style={{ fontSize: 18, fontWeight: 700, color: "var(--amber)" }}>{flightData.destination_code || "---"}</p>
                       <p style={{ fontSize: 12, color: "#aaa" }}>{flightData.destination_city || "Destination"}</p>
                       {flightData.scheduled_arrival && <p style={{ fontSize: 13, color: "#bbb", marginTop: 2 }}>
                         {flightData.actual_arrival && flightData.actual_arrival !== flightData.scheduled_arrival ? <><s style={{color:"#555"}}>{flightData.scheduled_arrival}</s> <span style={{color:"#fc6"}}>{flightData.actual_arrival}</span></> : flightData.scheduled_arrival}
@@ -2840,7 +3019,7 @@ Rules:
 
             {/* Fleet Assignment — driver picker */}
             <div style={{ background: "#12141a", border: "1px solid #1e2028", borderRadius: 14, padding: 18, marginBottom: 14 }}>
-              <p style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", marginBottom: 4, letterSpacing: "0.08em" }}>🚖 Fleet Assignment</p>
+              <p style={{ fontSize: 14, fontWeight: 700, color: "var(--amber)", marginBottom: 4, letterSpacing: "0.08em" }}>🚖 Fleet Assignment</p>
 
               {/* Active filters display */}
               {(() => {
@@ -2899,13 +3078,13 @@ Rules:
                     : "On duty";
 
                   // Border/bg colour by state
-                  const borderColor = isSelected    ? "#ff3a30"
+                  const borderColor = isSelected    ? "var(--amber)"
                     : isUnavailable                 ? "#1a1114"
                     : "1e2028";
                   const bgColor     = isSelected    ? "rgba(255,58,48,0.12)"
                     : isUnavailable                 ? "#09090c"
                     : "#0d0e12";
-                  const textColor   = isSelected    ? "#ff6b35"
+                  const textColor   = isSelected    ? "var(--amber)"
                     : isUnavailable                 ? "#333"
                     : "#ccc";
                   const subColor    = isSelected    ? "#ff8c35"
@@ -2926,10 +3105,11 @@ Rules:
                         opacity: isUnavailable ? 0.32 : 1,
                         transition: "all 0.15s ease"
                       }}>
-                      <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: "0.02em" }}>
-                        Driver #{driver.id}
+                      <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.02em" }}>
+                        #{driver.id}
                       </div>
-                      <div style={{ fontSize: 11, marginTop: 3, color: subColor, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {driver.name && <div style={{ fontSize: 10, color: subColor, marginTop: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{driver.name}</div>}
+                      <div style={{ fontSize: 10, marginTop: 2, color: subColor, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                         {reasonLabel}
                       </div>
                       {/* Airport capability badges */}
@@ -3309,7 +3489,7 @@ Rules:
                   </div>
                   <div className="resp-grid-3" style={{ display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:16 }}>
                     <div style={SC}><div style={{fontSize:18,marginBottom:4}}>✈️</div><div style={{fontSize:20,fontWeight:800,color:"#fc6"}}>{airportCount}</div><div style={{fontSize:11,color:"#555"}}>Airport Trips</div><div style={{fontSize:12,color:"#888",marginTop:4}}>{active.length?Math.round(airportCount/active.length*100):0}% of total</div></div>
-                    <div style={SC}><div style={{fontSize:18,marginBottom:4}}>🚗</div><div style={{fontSize:20,fontWeight:800,color:"#ff6b35"}}>{topDriver?`#${topDriver[0]}`:"—"}</div><div style={{fontSize:11,color:"#555"}}>Top Driver</div><div style={{fontSize:12,color:"#888",marginTop:4}}>{topDriver?`${topDriver[1]} trips`:"No trips"}</div></div>
+                    <div style={SC}><div style={{fontSize:18,marginBottom:4}}>🚗</div><div style={{fontSize:20,fontWeight:800,color:"var(--amber)"}}>{topDriver?`#${topDriver[0]}`:"—"}</div><div style={{fontSize:11,color:"#555"}}>Top Driver</div><div style={{fontSize:12,color:"#888",marginTop:4}}>{topDriver?`${topDriver[1]} trips`:"No trips"}</div></div>
                     <div style={SC}><div style={{fontSize:18,marginBottom:4}}>💵</div><div style={{fontSize:20,fontWeight:800,color:"#f88"}}>${totalFare.toLocaleString()}</div><div style={{fontSize:11,color:"#555"}}>All-Time Revenue</div><div style={{fontSize:12,color:"#888",marginTop:4}}>{fares.length} paid trips</div></div>
                   </div>
                 </div>
@@ -3332,11 +3512,11 @@ Rules:
                   <p style={{ fontSize: 12, fontWeight: 700, color: "#555", letterSpacing: "0.1em", marginBottom: 10 }}>DRIVER PERFORMANCE</p>
                   <div style={{ background: "#0d0e12", border: "1px solid #1e2028", borderRadius: 10, overflow: "hidden" }}>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", padding: "6px 14px", borderBottom: "1px solid #12141a" }}>
-                      {["Driver","Trips","Revenue","Airport"].map(h => <span key={h} style={{ fontSize: 11, fontWeight: 700, color: "#555", letterSpacing: "0.08em" }}>{h}</span>)}
+                      {["Driver","Trips","Revenue","Airport"].map(h => <span key={h} style={{ fontSize: 13, fontWeight: 700, color: "#555", letterSpacing: "0.08em" }}>{h}</span>)}
                     </div>
                     {sorted.map(([id, s]) => (
                       <div key={id} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", padding: "8px 14px", borderBottom: "1px solid #0a0b0f", alignItems: "center" }}>
-                        <span style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35" }}>#{id}</span>
+                        <span style={{ fontSize: 14, fontWeight: 700, color: "var(--amber)" }}>#{id}</span>
                         <span style={{ fontSize: 14, color: "#e8e6e1" }}>{s.trips}</span>
                         <span style={{ fontSize: 14, color: "#6c6" }}>${s.revenue.toLocaleString()}</span>
                         <span style={{ fontSize: 13, color: "#fc6" }}>{s.airport} ✈</span>
@@ -3455,11 +3635,11 @@ Rules:
                 <div style={{ marginBottom: 16 }}>
                   <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom: 12 }}>
                     <p style={{ fontSize:13, color:"#aaa" }}>{DRIVERS.length + customDrivers.length} registered drivers</p>
-                    <button onClick={()=>setShowAdd(v=>!v)} style={{ padding:"7px 14px", borderRadius:8, border:"1px solid #ff3a30", background:showAdd?"rgba(255,58,48,0.1)":"transparent", color:"#ff6b35", fontSize:13, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>{showAdd?"✕ Cancel":"+ Add Driver"}</button>
+                    <button onClick={()=>setShowAdd(v=>!v)} style={{ padding:"7px 14px", borderRadius:8, border:"1px solid #ff3a30", background:showAdd?"rgba(255,58,48,0.1)":"transparent", color:"var(--amber)", fontSize:13, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>{showAdd?"✕ Cancel":"+ Add Driver"}</button>
                   </div>
                   {showAdd && (
                     <div style={{ background:"#0d0e12", border:"1px solid #2a2d36", borderRadius:12, padding:16, marginBottom:14 }}>
-                      <p style={{ fontSize:14, fontWeight:700, color:"#ff6b35", marginBottom:12 }}>New Driver</p>
+                      <p style={{ fontSize:14, fontWeight:700, color:"var(--amber)", marginBottom:12 }}>New Driver</p>
                       {dFormErr && <p style={{ color:"#f88", fontSize:13, marginBottom:8 }}>{dFormErr}</p>}
                       <div className="resp-grid-2" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:10 }}>
                         <div><label style={labelStyle}>Driver #</label><input type="number" min="1" max="99" value={dForm.id} onChange={e=>setDForm(p=>({...p,id:e.target.value}))} style={inputStyle} placeholder="e.g. 25" /></div>
@@ -3491,14 +3671,17 @@ Rules:
                 const shift = getShiftLabel(d);
                 return (
                   <div key={d.id} style={{ background: "#12141a", border: "1px solid #1e2028", borderRadius: 12, padding: 14 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-                      <span style={{ fontSize: 20, fontWeight: 800, color: "#ff6b35", fontFamily: "inherit" }}>#{d.id}</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                      <span style={{ fontSize: 20, fontWeight: 800, color: "var(--amber)", fontFamily: "inherit" }}>#{d.id}</span>
+                      {d.name && <span style={{ fontSize: 14, fontWeight: 700, color: "#fff" }}>{d.name}</span>}
                       <Badge label={shift} ok={true} neutral />
-                      {d.airportPickup && <Badge label="✈ Pickup" ok={true} />}
-                      {d.airportDropoff && <Badge label="✈ Dropoff" ok={true} />}
+                      {d.airportPickup && <Badge label="✈ PU" ok={true} />}
+                      {d.airportDropoff && <Badge label="✈ DO" ok={true} />}
                       {!d.airportPickup && !d.airportDropoff && <Badge label="No Airport" ok={false} />}
                     </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, fontSize: 14 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, fontSize: 13 }}>
+                      {d.carType && <span style={{ color: "#888" }}>🚗 {d.carType}</span>}
+                      {d.phone && <span style={{ color: "#888" }}>📞 {d.phone}</span>}
                       <span style={{ color: "#aaa" }}>Shift: <span style={{ color: "#bbb" }}>{formatShiftDisplay(d.shiftStart, d.shiftEnd)}</span></span>
                       <span style={{ color: "#aaa" }}>Days Off: <span style={{ color: d.daysOff.length ? "#f88" : "#8f8" }}>{d.daysOff.length ? d.daysOff.join(", ") : "None"}</span></span>
                     </div>
@@ -3539,7 +3722,7 @@ Rules:
             {/* Maps API Key */}
             <div style={{ background: "#12141a", border: "1px solid #1e2028", borderRadius: 14, padding: 18, marginBottom: 14 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                <p style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", letterSpacing: "0.1em" }}>📍 GOOGLE MAPS AUTOCOMPLETE</p>
+                <p style={{ fontSize: 14, fontWeight: 700, color: "var(--amber)", letterSpacing: "0.1em" }}>📍 GOOGLE MAPS AUTOCOMPLETE</p>
                 {mapsReady && <span style={{ fontSize: 12, padding: "2px 8px", borderRadius: 10, background: "rgba(80,200,80,0.1)", color: "#6c6", border: "1px solid #1a3a1a" }}>Active</span>}
               </div>
               <p style={{ fontSize: 12, color: "#bbb", marginBottom: 10, lineHeight: 1.5 }}>
@@ -3593,7 +3776,7 @@ Rules:
                 </div>
               </div>
 
-              <p style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", marginBottom: 14, letterSpacing: "0.1em" }}>1. GOOGLE SHEETS ENDPOINT</p>
+              <p style={{ fontSize: 14, fontWeight: 700, color: "var(--amber)", marginBottom: 14, letterSpacing: "0.1em" }}>1. GOOGLE SHEETS ENDPOINT</p>
               <label style={labelStyle}>Web App URL</label>
               <p style={{ fontSize: 12, color: "#bbb", marginBottom: 6 }}>Paste the Google Apps Script URL from your setup. See the Setup Guide for step-by-step instructions.</p>
               <input
@@ -3612,7 +3795,7 @@ Rules:
 
             {/* Encryption Setup */}
             <div style={{ background: "#12141a", border: "1px solid #1e2028", borderRadius: 14, padding: 18, marginBottom: 14 }}>
-              <p style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", marginBottom: 14, letterSpacing: "0.1em" }}>2. ENCRYPTION PASSPHRASE</p>
+              <p style={{ fontSize: 14, fontWeight: 700, color: "var(--amber)", marginBottom: 14, letterSpacing: "0.1em" }}>2. ENCRYPTION PASSPHRASE</p>
               <p style={{ fontSize: 13, color: "#999", marginBottom: 10 }}>
                 This passphrase encrypts all customer data. If lost, your remote data cannot be recovered.
               </p>
@@ -3649,7 +3832,7 @@ Rules:
             {/* Sync Controls */}
             {syncConfigured && passphrase && (
               <div style={{ background: "#12141a", border: "1px solid #1e2028", borderRadius: 14, padding: 18, marginBottom: 14 }}>
-                <p style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", marginBottom: 14, letterSpacing: "0.1em" }}>3. SYNC CONTROLS</p>
+                <p style={{ fontSize: 14, fontWeight: 700, color: "var(--amber)", marginBottom: 14, letterSpacing: "0.1em" }}>3. SYNC CONTROLS</p>
                 <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
                   <button onClick={syncNow} disabled={syncStatus === "syncing"} style={{
                     flex: 1, padding: "14px", borderRadius: 10, border: "none",
@@ -3743,11 +3926,11 @@ Rules:
             {/* Storage Info Bar */}
             <div style={{ background: "#12141a", border: "1px solid #1e2028", borderRadius: 12, padding: 14, marginBottom: 14 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                <span style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", letterSpacing: "0.08em" }}>STORAGE</span>
+                <span style={{ fontSize: 14, fontWeight: 700, color: "var(--amber)", letterSpacing: "0.08em" }}>STORAGE</span>
                 <span style={{ fontSize: 13, color: "#aaa" }}>{storageInfo.capacityPercent}% of 5MB used</span>
               </div>
               <div style={{ height: 6, borderRadius: 3, background: "#1e2028", overflow: "hidden", marginBottom: 8 }}>
-                <div style={{ height: "100%", borderRadius: 3, width: `${Math.min(storageInfo.capacityPercent, 100)}%`, background: storageInfo.capacityPercent > 80 ? "#ff3a30" : storageInfo.capacityPercent > 50 ? "#fc6" : "#4ade80", transition: "width 0.3s" }} />
+                <div style={{ height: "100%", borderRadius: 3, width: `${Math.min(storageInfo.capacityPercent, 100)}%`, background: storageInfo.capacityPercent > 80 ? "var(--amber)" : storageInfo.capacityPercent > 50 ? "#fc6" : "#4ade80", transition: "width 0.3s" }} />
               </div>
               <div style={{ display: "flex", gap: 16, fontSize: 13, color: "#aaa" }}>
                 <span>📝 Bookings: <span style={{ color: "#bbb" }}>{storageInfo.bookingKB}KB</span></span>
@@ -3772,7 +3955,7 @@ Rules:
 
             {/* Current Data Summary */}
             <div style={{ background: "#12141a", border: "1px solid #1e2028", borderRadius: 12, padding: 14, marginBottom: 14 }}>
-              <p style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", letterSpacing: "0.08em", marginBottom: 10 }}>CURRENT DATA</p>
+              <p style={{ fontSize: 14, fontWeight: 700, color: "var(--amber)", letterSpacing: "0.08em", marginBottom: 10 }}>CURRENT DATA</p>
               <div className="resp-grid-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, textAlign: "center" }}>
                 <div style={{ background: "#0d0e12", borderRadius: 8, padding: "10px 8px" }}>
                   <p style={{ fontSize: 22, fontWeight: 800, color: "#fff" }}>{bookings.length}</p>
@@ -3791,7 +3974,7 @@ Rules:
 
             {/* Available Snapshots */}
             <div style={{ background: "#12141a", border: "1px solid #1e2028", borderRadius: 12, padding: 14, marginBottom: 14 }}>
-              <p style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", letterSpacing: "0.08em", marginBottom: 10 }}>SAVED SNAPSHOTS</p>
+              <p style={{ fontSize: 14, fontWeight: 700, color: "var(--amber)", letterSpacing: "0.08em", marginBottom: 10 }}>SAVED SNAPSHOTS</p>
               {snapshots.length === 0 ? (
                 <p style={{ fontSize: 14, color: "#bbb", textAlign: "center", padding: 16 }}>No snapshots yet. Tap "Back Up Now" or wait for auto-backup.</p>
               ) : (
@@ -3807,7 +3990,7 @@ Rules:
                         <div style={{ display: "flex", gap: 4 }}>
                           {restoreConfirmKey === snap.key ? (
                             <>
-                              <button onClick={() => handleRestore(snap.key)} style={{ padding: "3px 8px", borderRadius: 4, border: "none", background: "#ff3a30", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Restore</button>
+                              <button onClick={() => handleRestore(snap.key)} style={{ padding: "3px 8px", borderRadius: 4, border: "none", background: "var(--amber)", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Restore</button>
                               <button onClick={() => setRestoreConfirmKey(null)} style={{ padding: "3px 8px", borderRadius: 4, border: "1px solid #2a2d36", background: "transparent", color: "#aaa", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
                             </>
                           ) : (
@@ -3828,7 +4011,7 @@ Rules:
             {/* Backup Log */}
             <div style={{ background: "#12141a", border: "1px solid #1e2028", borderRadius: 12, padding: 14 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                <p style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", letterSpacing: "0.08em" }}>BACKUP LOG</p>
+                <p style={{ fontSize: 14, fontWeight: 700, color: "var(--amber)", letterSpacing: "0.08em" }}>BACKUP LOG</p>
                 <div style={{ display: "flex", gap: 4 }}>
                   <button onClick={() => setShowBackupLog(!showBackupLog)} style={{ padding: "3px 10px", borderRadius: 4, border: "1px solid #2a2d36", background: "transparent", color: "#bbb", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>{showBackupLog ? "Hide" : "Show"} ({backupLog.length})</button>
                   {backupLog.length > 0 && <button onClick={() => { BackupService.clearLog(); refreshBackupState(); }} style={{ padding: "3px 8px", borderRadius: 4, border: "1px solid #3a1a1a", background: "transparent", color: "#664", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Clear</button>}
@@ -3863,8 +4046,8 @@ Rules:
 
 // ── Subcomponents ──
 
-const labelStyle = { display: "block", fontSize: 13, fontWeight: 600, color: "#bbb", letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 6 };
-const inputStyle = { width: "100%", padding: "12px 14px", borderRadius: 8, border: "1px solid #1e2028", background: "#0d0e12", color: "#e8e6e1", fontSize: 15, fontFamily: "'Noto Sans KR', 'JetBrains Mono', monospace", outline: "revert" };
+const labelStyle = { display: "block", fontSize: 12, fontWeight: 600, color: "var(--slate-dim)", letterSpacing: "0.14em", textTransform: "uppercase", marginBottom: 6, fontFamily: "var(--mono)" };
+const inputStyle = { width: "100%", padding: "12px 14px", borderRadius: 8, border: "1px solid #1c2035", background: "var(--bg-1)", color: "var(--white)", fontSize: 16, fontFamily: "var(--sans)", outline: "none", transition: "border-color 0.15s, box-shadow 0.15s" };
 
 // ────────────────────────────────────────────────────────
 // LOGIN PAGE
@@ -3936,100 +4119,105 @@ function LoginPage({ endpointUrl: initialEndpointUrl, onLogin, onSaveEndpoint })
     } finally { setLoading(false); }
   }
 
-  const inp = { background: "#0d0e12", border: "1px solid #1e2028", borderRadius: 8, color: "#e8e6e1", fontSize: 15, padding: "12px 14px", width: "100%", outline: "none", fontFamily: "inherit", boxSizing: "border-box" };
-  const btn = { width: "100%", padding: "14px", borderRadius: 10, border: "none", fontSize: 16, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", transition: "all 0.2s" };
+  const inp = { background: "var(--bg-1)", border: "1px solid #1c2035", borderRadius: 8, color: "var(--white)", fontSize: 16, padding: "12px 14px", width: "100%", outline: "none", fontFamily: "var(--sans)", boxSizing: "border-box", transition: "border-color 0.15s, box-shadow 0.15s" };
+  const btn = { width: "100%", padding: "13px", borderRadius: 10, border: "none", fontSize: 17, fontWeight: 700, cursor: "pointer", fontFamily: "var(--sans)", transition: "all 0.2s", letterSpacing: "0.03em" };
+  const lbl = { display: "block", fontSize: 12, fontWeight: 600, color: "var(--slate-dim)", letterSpacing: "0.14em", textTransform: "uppercase", marginBottom: 6, fontFamily: "var(--mono)" };
 
   return (
-    <div style={{ minHeight: "100vh", background: "#0a0b0f", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, position: "relative", overflow: "hidden" }}>
-      {/* Background glow orbs */}
-      <div style={{ position: "absolute", top: "15%", left: "10%", width: 300, height: 300, borderRadius: "50%", background: "radial-gradient(circle, rgba(255,58,48,0.08) 0%, transparent 70%)", pointerEvents: "none" }} />
-      <div style={{ position: "absolute", bottom: "20%", right: "5%", width: 400, height: 400, borderRadius: "50%", background: "radial-gradient(circle, rgba(59,158,255,0.05) 0%, transparent 70%)", pointerEvents: "none" }} />
+    <div style={{ minHeight: "100vh", background: "var(--bg-0)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, position: "relative", overflow: "hidden" }}>
+      {/* Grid texture */}
+      <div style={{ position: "absolute", inset: 0, backgroundImage: "linear-gradient(rgba(61,159,255,0.018) 1px, transparent 1px), linear-gradient(90deg, rgba(61,159,255,0.018) 1px, transparent 1px)", backgroundSize: "40px 40px", pointerEvents: "none" }} />
+      {/* Glow orbs */}
+      <div style={{ position: "absolute", top: "10%", left: "8%", width: 400, height: 400, borderRadius: "50%", background: "radial-gradient(circle, rgba(245,166,35,0.06) 0%, transparent 70%)", pointerEvents: "none" }} />
+      <div style={{ position: "absolute", bottom: "10%", right: "5%", width: 500, height: 500, borderRadius: "50%", background: "radial-gradient(circle, rgba(61,159,255,0.04) 0%, transparent 70%)", pointerEvents: "none" }} />
 
-      <div style={{ width: "100%", maxWidth: 420, position: "relative", zIndex: 1 }}>
+      <div style={{ width: "100%", maxWidth: 420, position: "relative", zIndex: 1, animation: "fadeUp 0.4s ease forwards" }}>
         {/* Logo */}
-        <div style={{ textAlign: "center", marginBottom: 32 }}>
-          <div style={{ width: 68, height: 68, borderRadius: 18, background: "linear-gradient(135deg, #ff3a30, #ff6b35)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 34, marginBottom: 14, boxShadow: "0 8px 32px rgba(255,58,48,0.3)" }}>🚖</div>
-          <h1 style={{ color: "#fff", fontSize: 26, fontWeight: 800, margin: 0, letterSpacing: "0.03em" }}>DISPATCH HQ</h1>
-          <p style={{ color: "#555", fontSize: 14, marginTop: 4 }}>Taxi Dispatch Management</p>
-          <p style={{ color: "#3a3a4a", fontSize: 12, marginTop: 2 }}>택시 배차 관리 시스템</p>
+        <div style={{ textAlign: "center", marginBottom: 36 }}>
+          <div style={{ width: 64, height: 64, borderRadius: 18, background: "linear-gradient(135deg, #ff3a20, #ff5c2b)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 30, marginBottom: 16, boxShadow: "0 0 40px rgba(245,166,35,0.3)" }}>🚖</div>
+          <h1 style={{ color: "var(--white)", fontSize: 28, fontWeight: 800, margin: 0, letterSpacing: "0.16em", fontFamily: "var(--display)" }}>DISPATCH HQ</h1>
+          <p style={{ color: "var(--slate-dim)", fontSize: 11, marginTop: 6, letterSpacing: "0.12em", fontFamily: "var(--mono)" }}>택시 배차 관리 시스템</p>
         </div>
 
         {/* Card */}
-        <div style={{ background: "linear-gradient(145deg, #12141a, #0f1016)", border: "1px solid #1e2028", borderRadius: 20, padding: 28, boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}>
+        <div style={{ background: "var(--bg-1)", border: "1px solid #1c2035", borderRadius: 18, padding: 28, boxShadow: "0 24px 64px rgba(0,0,0,0.6)" }}>
           {/* Tabs */}
-          <div style={{ display: "flex", background: "#0a0b0f", borderRadius: 10, padding: 3, marginBottom: 24 }}>
+          <div style={{ display: "flex", background: "var(--bg-0)", borderRadius: 10, padding: 3, marginBottom: 24, border: "1px solid #1c2035" }}>
             {[["signin","Sign In"],["signup","Sign Up"]].map(([t, label]) => (
               <button key={t} onClick={() => { setTab(t); setError(""); setSuccess(""); }} style={{
-                flex: 1, padding: "9px 0", borderRadius: 8, border: "none", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", transition: "all 0.2s",
-                background: tab === t ? "linear-gradient(135deg, #ff3a30, #ff6b35)" : "transparent",
-                color: tab === t ? "#fff" : "#555",
-                boxShadow: tab === t ? "0 2px 8px rgba(255,58,48,0.3)" : "none"
+                flex: 1, padding: "9px 0", borderRadius: 8, border: "none", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "var(--sans)", transition: "all 0.2s", letterSpacing: "0.04em",
+                background: tab === t ? "linear-gradient(135deg, #ff3a20, #ff5c2b)" : "transparent",
+                color: tab === t ? "#fff" : "var(--slate-dim)",
+                boxShadow: tab === t ? "0 2px 12px rgba(255,92,43,0.25)" : "none"
               }}>{label}</button>
             ))}
           </div>
 
           {/* Error / Success */}
-          {error && <div style={{ padding: "11px 14px", borderRadius: 8, background: "rgba(255,58,48,0.08)", border: "1px solid #3a1a1a", color: "#f88", fontSize: 14, marginBottom: 18, lineHeight: 1.5 }}>{error}</div>}
-          {success && <div style={{ padding: "11px 14px", borderRadius: 8, background: "rgba(80,200,80,0.06)", border: "1px solid #1a3a1a", color: "#8f8", fontSize: 14, marginBottom: 18, lineHeight: 1.5 }}>{success}</div>}
+          {error && <div style={{ padding: "10px 14px", borderRadius: 8, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#fca5a5", fontSize: 13, marginBottom: 18, lineHeight: 1.5, fontFamily: "var(--sans)" }}>{error}</div>}
+          {success && <div style={{ padding: "10px 14px", borderRadius: 8, background: "rgba(34,197,94,0.06)", border: "1px solid rgba(34,197,94,0.2)", color: "#86efac", fontSize: 13, marginBottom: 18, lineHeight: 1.5, fontFamily: "var(--sans)" }}>{success}</div>}
 
           {tab === "signin" ? (
             <form onSubmit={handleSignIn}>
-              {/* Google Sheets URL — shown when not configured */}
+              {/* Google Sheets URL */}
               {showUrlField ? (
-                <div style={{ marginBottom: 14 }}>
-                  <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Google Sheets URL</label>
-                  <input style={{...inp, fontSize: 13}} type="url" value={endpointUrl} onChange={e => setEndpointUrl(e.target.value)} placeholder="https://script.google.com/macros/s/.../exec" autoComplete="off" />
-                  <p style={{ fontSize: 11, color: "#555", marginTop: 4 }}>Your Apps Script deployment URL. <span onClick={() => setShowUrlField(false)} style={{ color: "#ff6b35", cursor: "pointer" }}>{endpointUrl ? "Hide" : ""}</span></p>
+                <div style={{ marginBottom: 16 }}>
+                  <label style={lbl}>Google Sheets URL</label>
+                  <input style={{...inp, fontSize: 12}} type="url" value={endpointUrl} onChange={e => setEndpointUrl(e.target.value)} placeholder="https://script.google.com/macros/s/.../exec" autoComplete="off" />
+                  <p style={{ fontSize: 13, color: "var(--slate-dim)", marginTop: 4, fontFamily: "var(--mono)" }}>Your Apps Script deployment URL. {endpointUrl && <span onClick={() => setShowUrlField(false)} style={{ color: "var(--amber)", cursor: "pointer" }}>Hide</span>}</p>
                 </div>
               ) : (
-                <div style={{ marginBottom: 14, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <span style={{ fontSize: 12, color: "#3a6a3a" }}>✓ Server connected</span>
-                  <button type="button" onClick={() => setShowUrlField(true)} style={{ background: "transparent", border: "none", color: "#555", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Change URL</button>
+                <div style={{ marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0" }}>
+                  <span style={{ fontSize: 12, color: "var(--green)", display: "flex", alignItems: "center", gap: 6, fontFamily: "var(--mono)" }}>
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--green)", display: "inline-block", animation: "pulse-dot 2s infinite" }} />
+                    Server connected
+                  </span>
+                  <button type="button" onClick={() => setShowUrlField(true)} style={{ background: "transparent", border: "none", color: "var(--slate-dim)", fontSize: 11, cursor: "pointer", fontFamily: "var(--mono)", letterSpacing: "0.08em" }}>CHANGE URL</button>
                 </div>
               )}
               <div style={{ marginBottom: 14 }}>
-                <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Username</label>
-                <input style={inp} type="text" value={username} onChange={e => setUsername(e.target.value)} placeholder="your_username (사용자 이름)" autoComplete="username" autoCapitalize="none" />
+                <label style={lbl}>Username</label>
+                <input style={inp} type="text" value={username} onChange={e => setUsername(e.target.value)} placeholder="your_username" autoComplete="username" autoCapitalize="none" />
               </div>
-              <div style={{ marginBottom: 20, position: "relative" }}>
-                <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Password</label>
+              <div style={{ marginBottom: 22, position: "relative" }}>
+                <label style={lbl}>Password</label>
                 <input style={inp} type={showPass ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" autoComplete="current-password" />
-                <button type="button" onClick={() => setShowPass(v => !v)} style={{ position: "absolute", right: 12, top: 36, background: "transparent", border: "none", color: "#555", cursor: "pointer", fontSize: 14 }}>{showPass ? "👁" : "👁️"}</button>
+                <button type="button" onClick={() => setShowPass(v => !v)} style={{ position: "absolute", right: 12, top: 28, background: "transparent", border: "none", color: "var(--slate-dim)", cursor: "pointer", fontSize: 14 }}>{showPass ? "👁" : "👁️"}</button>
               </div>
-              <button type="submit" disabled={loading} style={{ ...btn, background: loading ? "#1e2028" : "linear-gradient(135deg, #ff3a30, #ff6b35)", color: loading ? "#555" : "#fff", boxShadow: loading ? "none" : "0 4px 16px rgba(255,58,48,0.3)" }}>
+              <button type="submit" disabled={loading} style={{ ...btn, background: loading ? "var(--bg-2)" : "linear-gradient(135deg, #ff3a20, #ff5c2b)", color: loading ? "var(--slate-dim)" : "#fff", boxShadow: loading ? "none" : "0 4px 20px rgba(245,166,35,0.3)" }}>
                 {loading ? "Signing in…" : "Sign In →"}
               </button>
-              <p style={{ textAlign: "center", fontSize: 13, color: "#444", marginTop: 16, marginBottom: 0 }}>No account? <button type="button" onClick={() => setTab("signup")} style={{ background: "none", border: "none", color: "#ff6b35", cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 600 }}>Request access</button></p>
+              <p style={{ textAlign: "center", fontSize: 12, color: "var(--slate-dim)", marginTop: 16, marginBottom: 0, fontFamily: "var(--sans)" }}>No account? <button type="button" onClick={() => setTab("signup")} style={{ background: "none", border: "none", color: "var(--amber)", cursor: "pointer", fontFamily: "var(--sans)", fontSize: 12, fontWeight: 600 }}>Request Access</button></p>
             </form>
           ) : (
             <form onSubmit={handleSignUp}>
               <div style={{ marginBottom: 14 }}>
-                <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Display Name</label>
+                <label style={lbl}>Display Name</label>
                 <input style={inp} type="text" value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="Your Full Name" autoComplete="name" />
               </div>
               <div style={{ marginBottom: 14 }}>
-                <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Username</label>
+                <label style={lbl}>Username</label>
                 <input style={inp} type="text" value={username} onChange={e => setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g,""))} placeholder="letters_numbers_only" autoComplete="username" autoCapitalize="none" />
-                <p style={{ fontSize: 11, color: "#444", marginTop: 4 }}>3-30 characters. Letters, numbers, and _ only.</p>
+                <p style={{ fontSize: 10, color: "var(--slate-dim)", marginTop: 4, fontFamily: "var(--mono)" }}>3–30 chars · letters, numbers, underscore only</p>
               </div>
               <div style={{ marginBottom: 14 }}>
-                <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Email (optional)</label>
+                <label style={lbl}>Email (optional)</label>
                 <input style={inp} type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="your@email.com" autoComplete="email" />
               </div>
-              <div style={{ marginBottom: 20, position: "relative" }}>
-                <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Password</label>
+              <div style={{ marginBottom: 22, position: "relative" }}>
+                <label style={lbl}>Password</label>
                 <input style={inp} type={showPass ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} placeholder="Min 8 characters" autoComplete="new-password" />
-                <button type="button" onClick={() => setShowPass(v => !v)} style={{ position: "absolute", right: 12, top: 36, background: "transparent", border: "none", color: "#555", cursor: "pointer", fontSize: 14 }}>{showPass ? "👁" : "👁️"}</button>
+                <button type="button" onClick={() => setShowPass(v => !v)} style={{ position: "absolute", right: 12, top: 28, background: "transparent", border: "none", color: "var(--slate-dim)", cursor: "pointer", fontSize: 14 }}>{showPass ? "👁" : "👁️"}</button>
               </div>
-              <button type="submit" disabled={loading} style={{ ...btn, background: loading ? "#1e2028" : "linear-gradient(135deg, #1a5a2a, #1a7a3a)", color: loading ? "#555" : "#fff", boxShadow: loading ? "none" : "0 4px 16px rgba(80,200,80,0.2)" }}>
+              <button type="submit" disabled={loading} style={{ ...btn, background: loading ? "var(--bg-2)" : "rgba(34,197,94,0.15)", color: loading ? "var(--slate-dim)" : "var(--green)", border: "1px solid rgba(34,197,94,0.25)", boxShadow: "none" }}>
                 {loading ? "Sending request…" : "Request Access"}
               </button>
-              <p style={{ textAlign: "center", fontSize: 12, color: "#444", marginTop: 14, lineHeight: 1.5, marginBottom: 0 }}>Account requires admin approval before sign in.</p>
+              <p style={{ textAlign: "center", fontSize: 13, color: "var(--slate-dim)", marginTop: 14, lineHeight: 1.6, marginBottom: 0, fontFamily: "var(--mono)" }}>Account requires admin approval before sign in.</p>
             </form>
           )}
         </div>
 
-        <p style={{ textAlign: "center", fontSize: 11, color: "#2a2d36", marginTop: 20 }}>Dispatch HQ · Secured</p>
+        <p style={{ textAlign: "center", fontSize: 10, color: "var(--border-1)", marginTop: 20, fontFamily: "var(--mono)", letterSpacing: "0.1em" }}>DISPATCH HQ · SECURED WITH AES-256</p>
       </div>
     </div>
   );
@@ -4050,7 +4238,7 @@ function AdminDashboard({ currentUser, endpointUrl, onSignOut }) {
   const fetchUsers = ucb(async () => {
     if (!endpointUrl) return;
     try {
-      const resp = await fetch(endpointUrl + "?action=adminGetUsers&sessionToken=" + encodeURIComponent(currentUser.token), { method: "GET", redirect: "follow" });
+      const resp = await fetch(endpointUrl + "?action=adminGetUsers&token=" + encodeURIComponent(loadSyncConfig().authToken || "") + "&sessionToken=" + encodeURIComponent(currentUser.token), { method: "GET", redirect: "follow" });
       const data = await resp.json();
       if (data.success) { setUsers(data.users || []); setStats({ activeSessions: data.activeSessions || 0, totalBookings: data.totalBookings || 0 }); }
     } catch(e) {}
@@ -4059,13 +4247,19 @@ function AdminDashboard({ currentUser, endpointUrl, onSignOut }) {
 
   uef(() => { fetchUsers(); }, [fetchUsers]);
 
-  const doAction = async (action, targetUsername) => {
+  const doAction = async (action, targetUsername, newPassword) => {
     setConfirmAction(null);
     setActionMsg("");
     try {
+      const body = { action, targetUsername, sessionToken: currentUser.token };
+      if (newPassword) body.newPasswordHash = await (async () => {
+        const enc = new TextEncoder();
+        const buf = await crypto.subtle.digest("SHA-256", enc.encode(newPassword + "dispatch-hq-client-salt"));
+        return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
+      })();
       const resp = await fetch(endpointUrl, {
         method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify({ action, targetUsername, sessionToken: currentUser.token })
+        body: JSON.stringify(body)
       });
       const data = await resp.json();
       setActionMsg(data.success ? "✅ Done — " + (data.message || action) : "❌ " + (data.error || "Failed"));
@@ -4086,7 +4280,7 @@ function AdminDashboard({ currentUser, endpointUrl, onSignOut }) {
         <span style={{ fontSize: 24 }}>🚖</span>
         <div style={{ flex: 1 }}>
           <p style={{ fontSize: 16, fontWeight: 800, color: "#fff", margin: 0, letterSpacing: "0.04em" }}>DISPATCH HQ</p>
-          <p style={{ fontSize: 12, color: "#ff6b35", margin: 0, fontWeight: 600 }}>Admin Dashboard</p>
+          <p style={{ fontSize: 12, color: "var(--amber)", margin: 0, fontWeight: 600 }}>Admin Dashboard</p>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span style={{ fontSize: 13, color: "#888" }}>👤 {currentUser.displayName}</span>
@@ -4119,10 +4313,34 @@ function AdminDashboard({ currentUser, endpointUrl, onSignOut }) {
           <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <div style={{ background: "#1a1c22", border: "1px solid #2a2d36", borderRadius: 16, padding: 24, maxWidth: 340, width: "90%" }}>
               <p style={{ fontSize: 16, fontWeight: 700, color: "#fff", marginBottom: 8 }}>Confirm Action</p>
-              <p style={{ fontSize: 14, color: "#bbb", marginBottom: 20 }}>{confirmAction.label} <strong style={{ color: "#fff" }}>{confirmAction.username}</strong>?</p>
+              <p style={{ fontSize: 14, color: "#bbb", marginBottom: confirmAction.isReset ? 12 : 20 }}>{confirmAction.label} <strong style={{ color: "#fff" }}>{confirmAction.username}</strong>?</p>
+              {confirmAction.isReset && (
+                <div style={{ marginBottom: 16 }}>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#888", marginBottom: 6, letterSpacing: "0.08em" }}>NEW PASSWORD</label>
+                  <input
+                    type="text"
+                    value={confirmAction.newPassword || ""}
+                    onChange={e => setConfirmAction(prev => ({ ...prev, newPassword: e.target.value }))}
+                    placeholder="Enter new password for dispatcher"
+                    style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid #2a2d36", background: "#0d0e12", color: "#e8e6e1", fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }}
+                  />
+                  <p style={{ fontSize: 11, color: "#555", marginTop: 4 }}>Share this with the dispatcher verbally or over the phone.</p>
+                </div>
+              )}
               <div style={{ display: "flex", gap: 10 }}>
                 <button onClick={() => setConfirmAction(null)} style={{ flex: 1, padding: "10px", borderRadius: 8, border: "1px solid #2a2d36", background: "transparent", color: "#888", fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
-                <button onClick={() => doAction(confirmAction.action, confirmAction.username)} style={{ flex: 1, padding: "10px", borderRadius: 8, border: "none", background: "#ff3a30", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Confirm</button>
+                <button
+                  onClick={() => {
+                    if (confirmAction.isReset && !confirmAction.newPassword?.trim()) {
+                      setActionMsg("❌ Please enter a new password");
+                      setConfirmAction(null);
+                      return;
+                    }
+                    doAction(confirmAction.action, confirmAction.username, confirmAction.newPassword);
+                  }}
+                  style={{ flex: 1, padding: "10px", borderRadius: 8, border: "none", background: confirmAction.isReset ? "#1a4a8a" : "var(--amber)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                  {confirmAction.isReset ? "🔑 Reset" : "Confirm"}
+                </button>
               </div>
             </div>
           </div>
@@ -4133,7 +4351,7 @@ function AdminDashboard({ currentUser, endpointUrl, onSignOut }) {
           <div style={{ padding: "14px 18px", borderBottom: "1px solid #1e2028", display: "flex", alignItems: "center", gap: 10 }}>
             <span style={{ fontSize: 20 }}>📋</span>
             <div style={{ flex: 1 }}>
-              <p style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", margin: "0 0 2px", letterSpacing: "0.08em" }}>BOOKING DATA</p>
+              <p style={{ fontSize: 14, fontWeight: 700, color: "var(--amber)", margin: "0 0 2px", letterSpacing: "0.08em" }}>BOOKING DATA</p>
               <p style={{ fontSize: 12, color: "#555", margin: 0 }}>{stats.totalBookings} records in cloud (AES-256 encrypted)</p>
             </div>
           </div>
@@ -4155,10 +4373,10 @@ function AdminDashboard({ currentUser, endpointUrl, onSignOut }) {
         {/* Users table */}
         <div style={{ ...cardStyle, padding: 0, overflow: "hidden" }}>
           <div style={{ padding: "14px 18px", borderBottom: "1px solid #1e2028", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <p style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", margin: 0, letterSpacing: "0.08em", flex: 1 }}>DISPATCHER ACCOUNTS</p>
+            <p style={{ fontSize: 14, fontWeight: 700, color: "var(--amber)", margin: 0, letterSpacing: "0.08em", flex: 1 }}>DISPATCHER ACCOUNTS</p>
             <div style={{ display: "flex", gap: 4 }}>
               {["all","pending","active","disabled"].map(s => (
-                <button key={s} onClick={() => setFilterStatus(s)} style={{ padding: "5px 10px", borderRadius: 6, border: filterStatus === s ? "1px solid #ff3a30" : "1px solid #1e2028", background: filterStatus === s ? "rgba(255,58,48,0.1)" : "transparent", color: filterStatus === s ? "#ff6b35" : "#555", fontSize: 12, cursor: "pointer", fontFamily: "inherit", fontWeight: 600, textTransform: "capitalize" }}>{s}{s==="pending" && pendingCount > 0 ? ` (${pendingCount})` : ""}</button>
+                <button key={s} onClick={() => setFilterStatus(s)} style={{ padding: "5px 10px", borderRadius: 6, border: filterStatus === s ? "1px solid #ff3a30" : "1px solid #1e2028", background: filterStatus === s ? "rgba(255,58,48,0.1)" : "transparent", color: filterStatus === s ? "var(--amber)" : "#555", fontSize: 12, cursor: "pointer", fontFamily: "inherit", fontWeight: 600, textTransform: "capitalize" }}>{s}{s==="pending" && pendingCount > 0 ? ` (${pendingCount})` : ""}</button>
               ))}
             </div>
             <button onClick={fetchUsers} style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid #1e2028", background: "transparent", color: "#666", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>↻ Refresh</button>
@@ -4183,6 +4401,7 @@ function AdminDashboard({ currentUser, endpointUrl, onSignOut }) {
                     <button onClick={() => setConfirmAction({ action: "rejectUser", username: user.username, label: "Reject account for" })} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #3a1a1a", background: "rgba(255,58,48,0.06)", color: "#f88", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>✗ Reject</button>
                   </>}
                   {user.status === "active" && <button onClick={() => setConfirmAction({ action: "disableUser", username: user.username, label: "Disable account for" })} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #2a2d36", background: "transparent", color: "#888", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Disable</button>}
+                  {user.status === "active" && <button onClick={() => setConfirmAction({ action: "resetPassword", username: user.username, label: "Reset password for", isReset: true })} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #2a3a4a", background: "rgba(59,158,255,0.06)", color: "#3b9eff", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>🔑 Reset PW</button>}
                   {user.status === "disabled" && <button onClick={() => setConfirmAction({ action: "enableUser", username: user.username, label: "Re-enable account for" })} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #1a3a1a", background: "transparent", color: "#6c6", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Enable</button>}
                   {user.status !== "active" && <button onClick={() => setConfirmAction({ action: "deleteUser", username: user.username, label: "Permanently delete account for" })} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #3a1a1a", background: "transparent", color: "#f44", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Delete</button>}
                 </div>
@@ -4255,7 +4474,7 @@ function AdminDashboard({ currentUser, endpointUrl, onSignOut }) {
 
           return (
             <div style={{ marginTop: 20 }}>
-              <p style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", letterSpacing: "0.1em", marginBottom: 14 }}>⚙️ SETTINGS</p>
+              <p style={{ fontSize: 14, fontWeight: 700, color: "var(--amber)", letterSpacing: "0.1em", marginBottom: 14 }}>⚙️ SETTINGS</p>
 
               {/* Google Sheets Sync */}
               <div style={{ background: "#0d0e12", border: "1px solid #1e2028", borderRadius: 12, padding: 18, marginBottom: 12 }}>
@@ -4677,8 +4896,8 @@ function AddressField({ label, value, onChange, highlight, mapsReady, speechLang
   }, [recState, onChange, speechLang]);
 
   // Colour coding for mic button states
-  const micBg      = recState === "recording" ? "#ff3a30" : recState === "processing" ? "#1a3a5a" : recState === "done" ? "#1a4a2a" : "#0d0e12";
-  const micBorder  = recState === "recording" ? "#ff3a30" : recState === "processing" ? "#1a4a8a" : recState === "done" ? "#1a6a3a" : "#2a2d36";
+  const micBg      = recState === "recording" ? "var(--amber)" : recState === "processing" ? "#1a3a5a" : recState === "done" ? "#1a4a2a" : "#0d0e12";
+  const micBorder  = recState === "recording" ? "var(--amber)" : recState === "processing" ? "#1a4a8a" : recState === "done" ? "#1a6a3a" : "#2a2d36";
   const micIcon    = recState === "recording" ? "⏹" : recState === "processing" ? "⏳" : recState === "done" ? "✓" : "🎤";
   const micPulse   = recState === "recording" ? "pulse 1s infinite" : "none";
   const micTitle   = recState === "recording" ? "Recording — tap to stop" : recState === "processing" ? "Processing audio…" : recState === "done" ? "Done!" : "Tap to speak address (HIPAA-compliant, on-device)";
@@ -4747,7 +4966,7 @@ function AddressField({ label, value, onChange, highlight, mapsReady, speechLang
           )}
           <p style={{
             fontSize: 11, margin: 0,
-            color: recState === "error" ? "#f88" : recState === "done" ? "#6c6" : recState === "recording" ? "#ff6b35" : "#888"
+            color: recState === "error" ? "#f88" : recState === "done" ? "#6c6" : recState === "recording" ? "var(--amber)" : "#888"
           }}>{whisperMsg}</p>
         </div>
       )}
@@ -4768,7 +4987,7 @@ function AddressField({ label, value, onChange, highlight, mapsReady, speechLang
                   background: i === activeIdx ? "rgba(255,107,53,0.1)" : "transparent", display: "flex", alignItems: "flex-start", gap: 10 }}>
                 <span style={{ fontSize: 16, marginTop: 1, flexShrink: 0 }}>📍</span>
                 <div style={{ overflow: "hidden" }}>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: i === activeIdx ? "#ff6b35" : "#e8e6e1", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{main}</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: i === activeIdx ? "var(--amber)" : "#e8e6e1", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{main}</div>
                   {secondary && <div style={{ fontSize: 12, color: "#777", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{secondary}</div>}
                 </div>
               </div>
@@ -4786,36 +5005,37 @@ function AddressField({ label, value, onChange, highlight, mapsReady, speechLang
 
 function Badge({ label, ok, neutral }) {
   return (
-    <span style={{ padding: "3px 10px", borderRadius: 4, fontSize: 12, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", background: neutral ? "rgba(150,150,150,0.1)" : ok ? "rgba(80,200,80,0.1)" : "rgba(255,80,80,0.1)", color: neutral ? "#888" : ok ? "#6c6" : "#f66", border: `1px solid ${neutral ? "#333" : ok ? "#1a3a1a" : "#3a1a1a"}` }}>
-      {label}
-    </span>
+    <span style={{
+      padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
+      fontFamily: "var(--mono)", letterSpacing: "0.06em",
+      background: neutral ? "rgba(139,146,168,0.08)" : ok ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)",
+      color: neutral ? "var(--slate)" : ok ? "var(--green)" : "#ef4444",
+      border: `1px solid ${neutral ? "#252a40" : ok ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)"}`
+    }}>{label}</span>
   );
 }
 
 function BookingSection({ title, bookings, onEdit, onDelete }) {
   if (!bookings.length) return null;
-
-  // Group by date+time for cluster display
   const groups = {};
   bookings.forEach(b => {
     const key = `${b.date}|${b.timeSlot}`;
     if (!groups[key]) groups[key] = [];
     groups[key].push(b);
   });
-
   return (
-    <div style={{ marginBottom: 24 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, padding: "8px 12px", background: "linear-gradient(90deg, rgba(255,58,48,0.08), transparent)", borderRadius: 8, borderLeft: "3px solid #ff3a30" }}>
-        <h3 style={{ fontSize: 15, fontWeight: 700, color: "#fff" }}>{title}</h3>
-        <span style={{ fontSize: 13, color: "#aaa", marginLeft: "auto" }}>{bookings.length} bookings</span>
+    <div style={{ marginBottom: 28 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+        <h3 style={{ fontSize: 11, fontWeight: 700, color: "var(--amber)", letterSpacing: "0.22em", fontFamily: "var(--mono)", whiteSpace: "nowrap" }}>{title.replace(/[^\w\s]/g,"").trim().toUpperCase()}</h3>
+        <div style={{ flex: 1, height: 1, background: "linear-gradient(90deg, var(--border-1) 0%, transparent 100%)" }} />
+        <span style={{ fontSize: 10, color: "var(--slate-dim)", fontFamily: "var(--mono)", letterSpacing: "0.1em" }}>{bookings.length}</span>
       </div>
-
       {Object.entries(groups).map(([key, cluster]) => (
-        <div key={key} style={{ marginBottom: 8 }}>
+        <div key={key} style={{ marginBottom: 6 }}>
           {cluster.length > 1 && (
-            <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 12px", marginBottom: 4 }}>
-              <span style={{ fontSize: 12, fontWeight: 700, color: "#ff6b35", background: "rgba(255,107,53,0.1)", padding: "2px 8px", borderRadius: 4 }}>⏱ {cluster.length} SAME SLOT</span>
-              <span style={{ fontSize: 12, color: "#999" }}>{cluster[0].date} @ {cluster[0].timeSlot}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 12px", marginBottom: 3 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: "#f59e0b", background: "rgba(245,158,11,0.08)", padding: "2px 8px", borderRadius: 4, fontFamily: "var(--mono)", letterSpacing: "0.08em" }}>{cluster.length} SAME SLOT</span>
+              <span style={{ fontSize: 13, color: "var(--slate-dim)", fontFamily: "var(--mono)" }}>{cluster[0].date} · {cluster[0].timeSlot}</span>
             </div>
           )}
           {cluster.map(b => <BookingCard key={b.id} booking={b} onEdit={onEdit} onDelete={onDelete} isCluster={cluster.length > 1} />)}
@@ -4827,29 +5047,31 @@ function BookingSection({ title, bookings, onEdit, onDelete }) {
 
 function BookingCard({ booking: b, onEdit, onDelete, isCluster }) {
   const dayName = DAYS[new Date(b.date + "T12:00:00").getDay()];
+  const flightColor = b.flightStatus === "on-time" || b.flightStatus === "landed" ? "var(--green)" : b.flightStatus === "delayed" ? "#f59e0b" : b.flightStatus === "cancelled" ? "#ef4444" : "#3d9fff";
   return (
-    <div style={{ background: "#12141a", border: `1px solid ${isCluster ? "#2a1a10" : "#1e2028"}`, borderRadius: 10, padding: 14, marginBottom: 6, borderLeft: isCluster ? "3px solid #ff6b35" : "3px solid #1e2028" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+    <div style={{
+      background: "var(--bg-1)", border: `1px solid ${isCluster ? "rgba(245,158,11,0.2)" : "var(--border-1)"}`,
+      borderRadius: 10, padding: "12px 14px", marginBottom: 5,
+      borderLeft: `2px solid ${isCluster ? "#f59e0b" : "var(--amber)"}`,
+      transition: "border-color 0.15s"
+    }}>
+      {/* Top row: date/time/driver + actions */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 14, fontWeight: 700, color: "#fff" }}>{b.date}</span>
-          <span style={{ fontSize: 13, color: "#aaa" }}>{dayName}</span>
-          <span style={{ fontSize: 14, fontWeight: 700, color: "#ff6b35", background: "rgba(255,58,48,0.1)", padding: "2px 8px", borderRadius: 4 }}>{b.timeSlot}</span>
+          <span style={{ fontSize: 15, fontWeight: 700, color: "var(--white)", fontFamily: "var(--mono)" }}>{b.date}</span>
+          <span style={{ fontSize: 13, color: "var(--slate-dim)", fontFamily: "var(--mono)" }}>{dayName.toUpperCase()}</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: "var(--amber)", background: "rgba(245,166,35,0.1)", padding: "2px 8px", borderRadius: 5, fontFamily: "var(--mono)", border: "1px solid rgba(245,166,35,0.2)" }}>{b.timeSlot}</span>
           {b.flightStatus && (
-            <span style={{
-              fontSize: 11, fontWeight: 700, padding: "2px 6px", borderRadius: 4, textTransform: "uppercase", letterSpacing: "0.05em",
-              background: b.flightStatus === "on-time" || b.flightStatus === "landed" ? "rgba(80,200,80,0.12)" : b.flightStatus === "delayed" ? "rgba(255,200,80,0.12)" : b.flightStatus === "cancelled" ? "rgba(255,58,48,0.12)" : "rgba(59,158,255,0.1)",
-              color: b.flightStatus === "on-time" || b.flightStatus === "landed" ? "#8f8" : b.flightStatus === "delayed" ? "#fc6" : b.flightStatus === "cancelled" ? "#f66" : "#8bc4ff",
-              border: `1px solid ${b.flightStatus === "on-time" || b.flightStatus === "landed" ? "#1a3a1a" : b.flightStatus === "delayed" ? "#3a3a1a" : b.flightStatus === "cancelled" ? "#3a1a1a" : "#1a2a4a"}`
-            }}>✈ {b.flightStatus}</span>
+            <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, textTransform: "uppercase", letterSpacing: "0.08em", fontFamily: "var(--mono)", color: flightColor, background: `${flightColor}12`, border: `1px solid ${flightColor}30` }}>✈ {b.flightStatus}</span>
           )}
         </div>
-        <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-          <button onClick={() => onEdit(b)} style={{ padding: "7px 12px", borderRadius: 6, border: "1px solid #2a2d36", background: "transparent", color: "#bbb", fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>✏️</button>
+        <div style={{ display: "flex", gap: 3, flexShrink: 0 }}>
+          <button onClick={() => onEdit(b)} style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #1c2035", background: "transparent", color: "var(--slate)", fontSize: 13, cursor: "pointer" }}>✏️</button>
           <button onClick={() => {
-            const w = window.open("","_blank","width=420,height=640");
+            const w = window.open("","_blank","width=420,height=660");
             const d = b.date ? new Date(b.date+"T12:00:00").toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",year:"numeric"}) : "—";
-            w.document.write('<!DOCTYPE html><html><head><title>Booking Slip</title><style>body{font-family:sans-serif;padding:20px;max-width:380px;margin:0 auto;color:#111;font-size:14px}h2{font-size:17px;margin:0 0 2px}p.sub{font-size:12px;color:#888;margin:0 0 12px}hr{border:none;border-top:1px solid #ddd;margin:10px 0}.row{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f0f0f0}.label{color:#888;font-size:12px;text-transform:uppercase;letter-spacing:.04em}.val{font-weight:600;text-align:right;max-width:220px}.fare{font-size:24px;font-weight:800;color:#b00}.btn{display:block;width:100%;padding:11px;margin-top:14px;background:#b00;color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer;font-family:sans-serif}</style></head><body>');
-            w.document.write('<h2>🚖 Dispatch HQ</h2><p class="sub">Booking Confirmation</p><hr>');
+            w.document.write('<!DOCTYPE html><html><head><title>Dispatch HQ — Booking Slip</title><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:"IBM Plex Mono",monospace;background:#fff;color:#111;font-size:13px;padding:24px;max-width:400px;margin:0 auto}h2{font-family:sans-serif;font-size:18px;font-weight:800;letter-spacing:0.1em;margin-bottom:2px}p.sub{font-size:11px;color:#888;margin-bottom:14px;letter-spacing:0.06em}.divider{border:none;border-top:1px solid #e5e5e5;margin:10px 0}.row{display:flex;justify-content:space-between;align-items:baseline;padding:7px 0;border-bottom:1px solid #f5f5f5}.label{font-size:10px;color:#888;text-transform:uppercase;letter-spacing:0.1em}.val{font-weight:600;text-align:right;font-size:13px;max-width:230px}.fare{font-size:26px;font-weight:800;color:#e03}@media print{button{display:none}}</style></head><body>');
+            w.document.write('<h2>🚖 DISPATCH HQ</h2><p class="sub">BOOKING CONFIRMATION</p><hr class="divider">');
             w.document.write('<div class="row"><span class="label">Customer</span><span class="val">'+b.customerName+'</span></div>');
             w.document.write('<div class="row"><span class="label">Phone</span><span class="val">'+b.phone+'</span></div>');
             w.document.write('<div class="row"><span class="label">Pickup</span><span class="val">'+b.pickupAddress+'</span></div>');
@@ -4859,25 +5081,28 @@ function BookingCard({ booking: b, onEdit, onDelete, isCluster }) {
             w.document.write('<div class="row"><span class="label">Time</span><span class="val">'+b.timeSlot+'</span></div>');
             w.document.write('<div class="row"><span class="label">Driver</span><span class="val">#'+b.driverNumber+'</span></div>');
             w.document.write('<div class="row"><span class="label">Passengers</span><span class="val">'+b.passengers+' pax · '+b.luggage+' bags</span></div>');
-            w.document.write('<div class="row"><span class="label">Trip Type</span><span class="val">'+(b.tripType==="round-trip"?"Round Trip":"One Way")+'</span></div>');
+            w.document.write('<div class="row"><span class="label">Trip</span><span class="val">'+(b.tripType==="round-trip"?"Round Trip":"One Way")+'</span></div>');
             w.document.write('<div class="row"><span class="label">Payment</span><span class="fare">$'+b.paymentAmount+'</span></div>');
-            w.document.write('<button class="btn" onclick="window.print()">🖨 Print Slip</button>');
-            w.document.write('<p style="font-size:11px;color:#bbb;margin-top:12px;text-align:center">Generated '+new Date().toLocaleString()+'</p>');
+            w.document.write('<p style="font-size:10px;color:#bbb;margin-top:16px;text-align:center;letter-spacing:0.06em">Generated '+new Date().toLocaleString()+'</p>');
             w.document.write('</body></html>');
-            w.document.close();
-          }} style={{ padding: "4px 8px", borderRadius: 4, border: "1px solid #2a2d36", background: "transparent", color: "#bbb", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }} title="Print booking slip">🖨</button>
-          <button onClick={() => onDelete(b.id)} style={{ padding: "7px 12px", borderRadius: 6, border: "1px solid #3a1a1a", background: "transparent", color: "#f66", fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>🗑</button>
+            w.document.close(); setTimeout(() => w.print(), 300);
+          }} style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #1c2035", background: "transparent", color: "var(--slate)", fontSize: 13, cursor: "pointer" }} title="Print Slip">🖨</button>
+          <button onClick={() => onDelete(b.id)} style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid rgba(239,68,68,0.2)", background: "transparent", color: "#ef4444", fontSize: 13, cursor: "pointer" }}>🗑</button>
         </div>
       </div>
-      <div className="booking-card-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "4px 12px", fontSize: 14 }}>
-        <span style={{ background: "rgba(255,107,53,0.1)", border: "1px solid rgba(255,107,53,0.25)", borderRadius: 6, padding: "2px 8px", fontSize: 13, fontWeight: 800, color: "#ff6b35" }}>🚗 #{b.driverNumber || "–"}</span>
-        <span style={{ color: "#aaa", fontFamily: "'Noto Sans KR', monospace" }}>👤 <span style={{ color: "#ddd" }}>{b.customerName}</span></span>
-        <span style={{ color: "#aaa" }}>📞 <span style={{ color: "#bbb" }}>{b.phone || "–"}</span></span>
-        <span style={{ color: "#aaa", gridColumn: "1/3" }}>📍 <span style={{ color: "#aaa" }}>{b.pickupAddress || "–"}</span> → <span style={{ color: "#aaa" }}>{b.dropoffAddress || "–"}</span></span>
-        <span style={{ color: "#aaa" }}>{b.tripType === "round-trip" ? "⇄ Round" : "→ One-Way"}</span>
-        <span style={{ color: "#aaa" }}>✈ <span style={{ color: "#bbb" }}>{b.airline || "–"}</span> {b.flightNumber || ""}{b.flightArrival ? <span style={{ color: "#8bc4ff", fontSize: 12 }}> ETA {b.flightArrival}</span> : ""}</span>
-        <span style={{ color: "#aaa" }}>🧑 {b.passengers}p / 🧳 {b.luggage}b</span>
-        <span style={{ color: "#aaa" }}>💰 <span style={{ color: "#4ade80", fontWeight: 600 }}>{b.paymentAmount ? `$${b.paymentAmount}` : "–"}</span>{b.fareBreakdown ? <span style={{ color: "#999", fontSize: 12 }}> ({b.fareBreakdown})</span> : ""}</span>
+      {/* Info grid */}
+      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr 1fr", gap: "5px 14px", alignItems: "center" }}>
+        <span style={{ background: "rgba(245,166,35,0.1)", border: "1px solid rgba(245,166,35,0.2)", borderRadius: 5, padding: "2px 9px", fontSize: 14, fontWeight: 700, color: "var(--amber)", fontFamily: "var(--mono)", whiteSpace: "nowrap" }}>#{b.driverNumber || "–"}</span>
+        <span style={{ fontSize: 15, color: "var(--white)", fontWeight: 500 }}>{b.customerName}</span>
+        <span style={{ fontSize: 14, color: "var(--slate)", fontFamily: "var(--mono)" }}>{b.phone || "–"}</span>
+        <span style={{ fontSize: 13, color: "var(--slate-dim)", gridColumn: "1/4", paddingTop: 2 }}>
+          <span style={{ color: "var(--slate)" }}>{b.pickupAddress || "–"}</span>
+          <span style={{ color: "#252a40", margin: "0 6px" }}>→</span>
+          <span style={{ color: "var(--slate)" }}>{b.dropoffAddress || "–"}</span>
+        </span>
+        {b.airline && <span style={{ fontSize: 13, color: "#3d9fff", fontFamily: "var(--mono)", gridColumn: "1/3" }}>✈ {b.airline} {b.flightNumber}{b.flightArrival ? ` · ETA ${b.flightArrival}` : ""}</span>}
+        <span style={{ fontSize: 13, color: "var(--slate-dim)", fontFamily: "var(--mono)", gridColumn: b.airline ? "3" : "1/3" }}>{b.passengers}p · {b.luggage}b · {b.tripType === "round-trip" ? "RT" : "OW"}</span>
+        <span style={{ fontSize: 16, fontWeight: 700, color: "var(--green)", fontFamily: "var(--mono)", gridColumn: "3" }}>{b.paymentAmount ? `$${b.paymentAmount}` : "–"}{b.fareBreakdown ? <span style={{ color: "var(--slate-dim)", fontSize: 11, fontWeight: 400 }}> {b.fareBreakdown}</span> : ""}</span>
       </div>
     </div>
   );
