@@ -2374,7 +2374,7 @@ Rules:
     if (dupBooking && !window.dupConfirmed) {
       window.dupConfirmed = true;
       setIsSubmitting(false);
-      setFormError(`⚠️ Possible duplicate — a booking already exists for this phone at ${form.timeSlot}. Tap Confirm again to book anyway.`);
+      setFormError(`⚠️ Possible duplicate — a booking already exists for this phone at ${form.timeSlot}. Tap Confirm again to book anyway. | 중복 예약 — 이 전화번호로 ${form.timeSlot}에 예약이 이미 있습니다. 다시 확인을 누르면 예약됩니다.`);
       setTimeout(() => { window.dupConfirmed = false; }, 5000);
       return;
     }
@@ -2385,7 +2385,7 @@ Rules:
       if (!window.pastDateConfirmed) {
         window.pastDateConfirmed = true;
         setIsSubmitting(false);
-        setFormError("⚠️ This date is in the past. Tap Confirm again to book anyway.");
+        setFormError("⚠️ This date is in the past. Tap Confirm again to book anyway. | 날짜가 과거입니다. 다시 확인을 누르면 예약됩니다.");
         setTimeout(() => { window.pastDateConfirmed = false; }, 4000);
         return;
       }
@@ -3356,6 +3356,9 @@ Rules:
                       <p style={{ fontSize: 15, fontWeight: 700, color: isWarning ? "#fc6" : "#f88" }}>
                         {isWarning ? "Optional fields empty — tap Confirm again to submit anyway" : `${requiredList.length} required field${requiredList.length !== 1 ? "s" : ""} missing`}
                       </p>
+                      <p style={{ fontSize: 12, color: isWarning ? "#fc6" : "#f88", opacity: 0.8, marginTop: 3, fontFamily: "var(--sans)" }}>
+                        {isWarning ? "선택 항목이 비어 있습니다 — 다시 확인을 눌러 제출하세요" : `필수 항목 ${requiredList.length}개가 누락되었습니다`}
+                      </p>
                     </div>
                     <button onClick={() => { setFormError(""); setMissingFields([]); }} style={{ background: "transparent", border: "none", color: "#c0c0c0", fontSize: 16, cursor: "pointer", flexShrink: 0 }}>✕</button>
                   </div>
@@ -3379,7 +3382,7 @@ Rules:
                       </div>
                     </div>
                   )}
-                  {isRequired && <p style={{ fontSize: 14, color: "#d0d8ec", fontWeight: 500, marginTop: 8 }}>Fill in the red-highlighted fields above and try again.</p>}
+                  {isRequired && <p style={{ fontSize: 14, color: "#d0d8ec", fontWeight: 500, marginTop: 8 }}>Fill in the red-highlighted fields above and try again. <span style={{ fontFamily: "var(--sans)", opacity: 0.8 }}>위의 빨간색 항목을 입력하고 다시 시도하세요.</span></p>}
                 </div>
               );
             })()}
