@@ -850,7 +850,7 @@ const DRIVERS = [
   { id: "860", name: "HAN S H",   carType: "Gray Toyota RAV4",          phone: "646-567-8644", airportPickup: false, airportDropoff: false, shiftStart: "07:00", shiftEnd: "22:00", daysOff: ["Wednesday"], notes: "No airport service." },
   { id: "877", name: "YI BOB",    carType: "White Honda Pilot",         phone: "646-886-6371", airportPickup: true,  airportDropoff: true,  shiftStart: "04:00", shiftEnd: "00:00", daysOff: [], notes: "" },
   { id: "887", name: "YUN J K",   carType: "White Infiniti SUV",        phone: "917-655-1737", airportPickup: true,  airportDropoff: false, shiftStart: "04:00", shiftEnd: "18:00", daysOff: ["Sunday"], specialShifts: [{ day: "Wednesday", start: "04:00", end: "12:00" }, { day: "Saturday", start: "04:00", end: "12:00" }], notes: "Wed/Sat: 4am–12pm. No airport dropoff." },
-  { id: "888", name: "PARK J G",  carType: "White Toyota Sedan",        phone: "718-813-0448", airportPickup: true,  airportDropoff: true,  shiftStart: "07:00", shiftEnd: "00:00", daysOff: ["Sunday"], notes: "" },
+  { id: "888", name: "PARK J G",  carType: "White Toyota Sedan",        phone: "718-813-0448", airportPickup: true,  airportDropoff: false, shiftStart: "07:00", shiftEnd: "00:00", daysOff: ["Sunday"], notes: "No airport dropoff." },
   { id: "895", name: "LEE S I",   carType: "Black Honda RDX",           phone: "917-359-7779", airportPickup: true,  airportDropoff: true,  shiftStart: "10:00", shiftEnd: "20:00", daysOff: [], notes: "" },
   // ── NJ Drivers ──
   { id: "100", name: "YOO S H",   carType: "Gray Dodge Minivan",        phone: "201-286-4668", airportPickup: true,  airportDropoff: true,  shiftStart: "00:00", shiftEnd: "00:00", daysOff: [], notes: "🚗 NJ-based driver · 24hrs" },
