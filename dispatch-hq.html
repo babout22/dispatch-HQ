@@ -191,6 +191,58 @@
       .booking-card-grid { grid-template-columns: 1fr 1fr; }
     }
 
+    /* ── Mobile booking form optimizations ── */
+    @media (max-width: 600px) {
+      /* Larger tap targets on all inputs */
+      input, select { min-height: 48px; font-size: 16px !important; }
+
+      /* Sticky mic bar at bottom */
+      .mobile-mic-bar {
+        position: fixed; bottom: 0; left: 0; right: 0;
+        background: rgba(6,7,13,0.97);
+        backdrop-filter: blur(20px);
+        border-top: 1px solid var(--border-1);
+        padding: 10px 16px 20px;
+        z-index: 90;
+        display: flex; gap: 8px; align-items: center;
+      }
+
+      /* Add bottom padding to form so sticky bar doesn't cover it */
+      .booking-form-mobile { padding-bottom: 88px !important; }
+
+      /* Section cards stack cleanly */
+      .form-section {
+        border-radius: 12px !important;
+        margin-bottom: 10px !important;
+      }
+
+      /* Trip type big buttons */
+      .trip-type-btn {
+        padding: 14px 0 !important;
+        font-size: 15px !important;
+      }
+
+      /* Pax stepper */
+      .pax-step-btn {
+        min-width: 44px; min-height: 44px;
+        display: flex; align-items: center; justify-content: center;
+      }
+
+      /* Section labels */
+      .form-section-label {
+        font-size: 11px !important;
+        letter-spacing: 0.16em !important;
+      }
+
+      /* Confirm button always big */
+      .confirm-btn {
+        padding: 18px !important;
+        font-size: 18px !important;
+        border-radius: 14px !important;
+        min-height: 58px;
+      }
+    }
+
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
     }
@@ -234,12 +286,6 @@ const { useState, useEffect, useCallback, useRef, useMemo } = React;
 const AUTH_ACCOUNTS_KEY = "dispatch-hq-accounts";
 const AUTH_SESSION_KEY = "dispatch-hq-session";
 const ADMIN_EMAIL = "admin";
-async function hashPassword(password, salt) {
-  const enc = new TextEncoder();
-  const data = enc.encode(salt + password + "dispatch-hq-2024");
-  const buf = await crypto.subtle.digest("SHA-256", data);
-  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
-}
 function generateId() {
   const arr = new Uint8Array(12);
   crypto.getRandomValues(arr);
@@ -1418,6 +1464,7 @@ const BackupService = {
 };
 function DispatcherApp({ session, onLogout }) {
   const [view, setView] = useState("booking");
+  const [priceCheckMode, setPriceCheckMode] = useState(false);
   const [gdprDismissed, setGdprDismissed] = useState(() => {
     try {
       return localStorage.getItem("dispatch-hq-gdpr-notice") === "dismissed";
@@ -1930,20 +1977,62 @@ function DispatcherApp({ session, onLogout }) {
     };
   }, [autoSyncEnabled, autoSyncInterval, syncConfig.endpointUrl, passphrase, syncStatus]);
   const [paymentManuallyEdited, setPaymentManuallyEdited] = useState(false);
+  const [autoFareLabel, setAutoFareLabel] = useState("");
   useEffect(() => {
-    if (form.pickupAddress && form.dropoffAddress) {
-      const result = lookupFlatRate(form.pickupAddress, form.dropoffAddress);
-      setManualFare(result);
-      if (result.found && !paymentManuallyEdited) {
-        const total = form.tripType === "round-trip" ? result.baseFare * 2 + result.toll * 2 : result.total;
-        const pax = parseInt(form.passengers) || 1;
-        const extra = pax >= 5 ? Math.ceil((pax - 4) * 10) : 0;
-        setForm((p) => ({ ...p, paymentAmount: String(total + extra) }));
+    if (!form.pickupAddress || !form.dropoffAddress) {
+      setManualFare(null);
+      setAutoFareLabel("");
+      return;
+    }
+    const result = lookupFlatRate(form.pickupAddress, form.dropoffAddress);
+    setManualFare(result);
+    if (!result) {
+      setAutoFareLabel("");
+      return;
+    }
+    let total = result.fare;
+    const pax = parseInt(form.passengers) || 1;
+    const bags = parseInt(form.luggage) || 0;
+    const pAnchor = getAnchorCode(form.pickupAddress || "");
+    const dAnchor = getAnchorCode(form.dropoffAddress || "");
+    const isAirport = pAnchor || dAnchor;
+    const extraNotes = [...result.breakdown ? [result.breakdown] : []];
+    if (isAirport) {
+      if (pax === 4 || pax === 5) {
+        total = Math.round(total * 1.5);
+        extraNotes.push("\xD71.5 (4\u20135 pax)");
+      } else if (pax >= 6) {
+        total = Math.round(total * 2);
+        extraNotes.push("\xD72 (6+ pax)");
       }
     } else {
-      setManualFare(null);
+      if (pax > 3) {
+        const e = (pax - 3) * 10;
+        total += e;
+        extraNotes.push(`+$${e} extra pax`);
+      }
+      if (bags > 3) {
+        const e = (bags - 3) * 5;
+        total += e;
+        extraNotes.push(`+$${e} extra bags`);
+      }
     }
-  }, [form.pickupAddress, form.dropoffAddress, form.tripType, form.passengers, paymentManuallyEdited]);
+    if (form.tripType === "round-trip") {
+      total *= 2;
+      extraNotes.push("\xD72 RT");
+    }
+    total = Math.round(total);
+    const label = `Auto: ${result.route} = $${total}${extraNotes.length ? " (" + extraNotes.join(", ") + ")" : ""}`;
+    setAutoFareLabel(label);
+    if (!paymentManuallyEdited) {
+      setForm((p) => ({
+        ...p,
+        paymentAmount: String(total),
+        fareRoute: result.route || "",
+        fareBreakdown: extraNotes.join(", ")
+      }));
+    }
+  }, [form.pickupAddress, form.dropoffAddress, form.tripType, form.passengers, form.luggage, paymentManuallyEdited]);
   const runAIAssistHandler = useCallback(async () => {
     setAiLoading(true);
     setAiError("");
@@ -2541,6 +2630,8 @@ Rules:
     }
     setShowConfirm(booking);
     setForm({ ...INIT_FORM });
+    setPaymentManuallyEdited(false);
+    setAutoFareLabel("");
     setFlightData(null);
     setFareData(null);
     setAiSummary("");
@@ -2731,22 +2822,123 @@ Rules:
     letterSpacing: "0.14em",
     transition: "color 0.15s, border-color 0.15s",
     whiteSpace: "nowrap"
-  } }, label)), /* @__PURE__ */ React.createElement("div", { style: { width: 1, height: 18, background: "var(--border-1)", margin: "0 8px" } }), /* @__PURE__ */ React.createElement("button", { onClick: onLogout, style: { padding: "5px 10px", borderRadius: "var(--r)", border: "1px solid var(--border-0)", background: "transparent", color: "#6b7a99", fontSize: 10, cursor: "pointer", fontFamily: "var(--mono)", letterSpacing: "0.12em", transition: "all 0.15s" } }, "EXIT"))), /* @__PURE__ */ React.createElement("main", { role: "main", "aria-label": "Dispatch HQ Application", style: { maxWidth: 980, margin: "0 auto", padding: "24px 16px" } }, !gdprDismissed && /* @__PURE__ */ React.createElement("div", { role: "alert", style: { padding: "14px 18px", borderRadius: 10, marginBottom: 20, background: "rgba(61,159,255,0.05)", border: "1px solid rgba(61,159,255,0.15)", display: "flex", alignItems: "flex-start", gap: 12 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 14, marginTop: 1 } }, "\u{1F512}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 13, fontWeight: 600, color: "#3d9fff", marginBottom: 4, fontFamily: "var(--sans)" } }, "Privacy Notice"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, color: "#a8b4cc", lineHeight: 1.6 } }, "This app stores customer booking data on your device. Cloud Backup encrypts all data before transmission. AI Smart Fill sends booking text to Anthropic's API \u2014 don't include sensitive data beyond what's needed. Bookings auto-purge after 2 years.")), /* @__PURE__ */ React.createElement("button", { onClick: dismissGdpr, style: { padding: "5px 14px", borderRadius: 6, border: "none", background: "rgba(61,159,255,0.15)", color: "#3d9fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "var(--sans)", flexShrink: 0, whiteSpace: "nowrap" } }, "Got it")), view === "booking" && /* @__PURE__ */ React.createElement("div", { role: "form", "aria-label": "New booking form" }, /* @__PURE__ */ React.createElement("div", { className: "card-enter" }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h2", { style: { fontSize: 26, fontWeight: 800, color: "#f0eef8", fontFamily: "var(--display)", letterSpacing: "-0.01em" } }, editingBooking ? "Edit Booking" : "New Booking"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 13, color: "#6b7a99", fontFamily: "var(--mono)", letterSpacing: "0.08em", marginTop: 2 } }, (/* @__PURE__ */ new Date()).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }).toUpperCase())), editingBooking && /* @__PURE__ */ React.createElement("button", { onClick: () => {
+  } }, label)), /* @__PURE__ */ React.createElement("div", { style: { width: 1, height: 18, background: "var(--border-1)", margin: "0 8px" } }), /* @__PURE__ */ React.createElement("button", { onClick: onLogout, style: { padding: "5px 10px", borderRadius: "var(--r)", border: "1px solid var(--border-0)", background: "transparent", color: "#6b7a99", fontSize: 10, cursor: "pointer", fontFamily: "var(--mono)", letterSpacing: "0.12em", transition: "all 0.15s" } }, "EXIT"))), /* @__PURE__ */ React.createElement("main", { role: "main", "aria-label": "Dispatch HQ Application", style: { maxWidth: 980, margin: "0 auto", padding: "24px 16px" } }, !gdprDismissed && /* @__PURE__ */ React.createElement("div", { role: "alert", style: { padding: "14px 18px", borderRadius: 10, marginBottom: 20, background: "rgba(61,159,255,0.05)", border: "1px solid rgba(61,159,255,0.15)", display: "flex", alignItems: "flex-start", gap: 12 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 14, marginTop: 1 } }, "\u{1F512}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 13, fontWeight: 600, color: "#3d9fff", marginBottom: 4, fontFamily: "var(--sans)" } }, "Privacy Notice"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, color: "#a8b4cc", lineHeight: 1.6 } }, "This app stores customer booking data on your device. Cloud Backup encrypts all data before transmission. AI Smart Fill sends booking text to Anthropic's API \u2014 don't include sensitive data beyond what's needed. Bookings auto-purge after 2 years.")), /* @__PURE__ */ React.createElement("button", { onClick: dismissGdpr, style: { padding: "5px 14px", borderRadius: 6, border: "none", background: "rgba(61,159,255,0.15)", color: "#3d9fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "var(--sans)", flexShrink: 0, whiteSpace: "nowrap" } }, "Got it")), view === "booking" && /* @__PURE__ */ React.createElement("div", { role: "form", "aria-label": "New booking form" }, /* @__PURE__ */ React.createElement("div", { className: "card-enter booking-form-mobile" }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h2", { style: { fontSize: 26, fontWeight: 800, color: "#f0eef8", fontFamily: "var(--display)", letterSpacing: "-0.01em" } }, editingBooking ? "EDIT BOOKING" : priceCheckMode ? "PRICE CHECK" : "NEW BOOKING"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 11, color: "var(--slate-dim)", fontFamily: "var(--mono)", letterSpacing: "0.12em", marginTop: 2 } }, (/* @__PURE__ */ new Date()).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }).toUpperCase())), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center" } }, !editingBooking && /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => {
+        setPriceCheckMode((v) => !v);
+        setForm((p) => ({ ...INIT_FORM, pickupAddress: p.pickupAddress, dropoffAddress: p.dropoffAddress, passengers: p.passengers, tripType: p.tripType }));
+        setPaymentManuallyEdited(false);
+        setAutoFareLabel("");
+      },
+      style: { padding: "7px 14px", borderRadius: 8, border: `2px solid ${priceCheckMode ? "var(--amber)" : "var(--border-1)"}`, background: priceCheckMode ? "rgba(245,166,35,0.12)" : "transparent", color: priceCheckMode ? "var(--amber)" : "var(--slate)", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "var(--mono)", letterSpacing: "0.1em", transition: "all 0.2s" }
+    },
+    priceCheckMode ? "\u2715 CLOSE" : "\u{1F4B2} PRICE"
+  ), !editingBooking && !priceCheckMode && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 5 } }, ["Today", "Tomorrow"].map((label, i) => {
+    const d = /* @__PURE__ */ new Date();
+    d.setDate(d.getDate() + i);
+    const val = d.toISOString().split("T")[0];
+    return /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        key: label,
+        onClick: () => setForm((p) => ({ ...p, date: val })),
+        style: { padding: "6px 12px", borderRadius: 7, border: `1px solid ${form.date === val ? "var(--amber)" : "var(--border-1)"}`, background: form.date === val ? "rgba(245,166,35,0.1)" : "transparent", color: form.date === val ? "var(--amber)" : "var(--slate)", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "var(--mono)", letterSpacing: "0.06em", whiteSpace: "nowrap" }
+      },
+      label.toUpperCase()
+    );
+  })), editingBooking && /* @__PURE__ */ React.createElement("button", { onClick: () => {
     setEditingBooking(null);
     setForm({ ...INIT_FORM });
-  }, style: { padding: "7px 16px", background: "var(--bg-2)", border: "1px solid #1c2035", borderRadius: 8, color: "#a8b4cc", fontSize: 13, cursor: "pointer", fontFamily: "var(--sans)" } }, "Cancel Edit")), /* @__PURE__ */ React.createElement("div", { style: { background: "var(--bg-1)", border: "1px solid #1c2035", borderRadius: 12, padding: 18, marginBottom: 12 } }, /* @__PURE__ */ React.createElement("div", { className: "resp-grid-2", style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement("div", { style: { position: "relative" } }, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "\u{1F4C5} Date"), /* @__PURE__ */ React.createElement("button", { "data-picker": true, onClick: () => setShowCal((v) => !v), style: {
+  }, style: { padding: "7px 16px", background: "var(--bg-2)", border: "1px solid var(--border-1)", borderRadius: 8, color: "#a8b4cc", fontSize: 13, cursor: "pointer", fontFamily: "var(--sans)" } }, "Cancel"))), priceCheckMode && /* @__PURE__ */ React.createElement("div", { style: { animation: "fadeUp 0.25s ease forwards" } }, autoFareLabel ? /* @__PURE__ */ React.createElement("div", { style: { background: "linear-gradient(135deg, rgba(245,166,35,0.08), rgba(245,166,35,0.04))", border: "2px solid var(--amber-border)", borderRadius: 16, padding: "24px 20px", marginBottom: 16, textAlign: "center", position: "relative", overflow: "hidden" } }, /* @__PURE__ */ React.createElement("div", { style: { position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg, var(--amber), transparent)" } }), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 11, fontWeight: 700, color: "var(--slate-dim)", letterSpacing: "0.2em", fontFamily: "var(--mono)", marginBottom: 8 } }, "ESTIMATED FARE"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 64, fontWeight: 400, color: "var(--amber)", fontFamily: "var(--display)", letterSpacing: "0.05em", lineHeight: 1, marginBottom: 6 } }, "$", form.paymentAmount || "\u2014"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 12, color: "var(--slate)", fontFamily: "var(--mono)", letterSpacing: "0.06em" } }, autoFareLabel.replace("Auto: ", "").replace("Auto:", "")), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => setPriceCheckMode(false),
+      style: { marginTop: 20, padding: "12px 32px", borderRadius: 10, border: "none", background: "linear-gradient(135deg, #c47a0a, var(--amber))", color: "#000", fontSize: 14, fontWeight: 800, cursor: "pointer", fontFamily: "var(--display)", letterSpacing: "0.12em", boxShadow: "0 4px 20px rgba(245,166,35,0.3)" }
+    },
+    "+ BOOK THIS TRIP"
+  )) : /* @__PURE__ */ React.createElement("div", { style: { background: "var(--bg-1)", border: "1px solid var(--border-1)", borderRadius: 12, padding: "20px", marginBottom: 16, textAlign: "center" } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 32, color: "var(--slate-dim)", marginBottom: 8 } }, "\u{1F4B2}"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, color: "var(--slate)", fontFamily: "var(--mono)", letterSpacing: "0.08em" } }, "ENTER PICKUP & DROPOFF TO SEE PRICE")), /* @__PURE__ */ React.createElement("div", { className: "form-section", style: { background: "var(--bg-1)", border: "1px solid var(--border-1)", borderRadius: 12, padding: 16, marginBottom: 10 } }, /* @__PURE__ */ React.createElement("p", { className: "form-section-label", style: { fontSize: 10, fontWeight: 700, color: "var(--amber)", letterSpacing: "0.2em", fontFamily: "var(--mono)", marginBottom: 12 } }, "ROUTE"), /* @__PURE__ */ React.createElement(
+    AddressField,
+    {
+      label: "Pickup Address",
+      value: form.pickupAddress,
+      onChange: (v) => {
+        const norm = normalizeLocation(v);
+        const doNorm = normalizeLocation(form.dropoffAddress);
+        const airport = ["JFK", "LGA", "EWR"].includes(norm) || ["JFK", "LGA", "EWR"].includes(doNorm);
+        setForm((p) => ({ ...p, pickupAddress: v, ...!airport && { airline: "", flightNumber: "" } }));
+      },
+      highlight: false,
+      mapsReady,
+      speechLang
+    }
+  ), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 10 } }, /* @__PURE__ */ React.createElement(
+    AddressField,
+    {
+      label: "Dropoff Address",
+      value: form.dropoffAddress,
+      onChange: (v) => {
+        const norm = normalizeLocation(v);
+        const puNorm = normalizeLocation(form.pickupAddress);
+        const airport = ["JFK", "LGA", "EWR"].includes(norm) || ["JFK", "LGA", "EWR"].includes(puNorm);
+        setForm((p) => ({ ...p, dropoffAddress: v, ...!airport && { airline: "", flightNumber: "" } }));
+      },
+      highlight: false,
+      mapsReady,
+      speechLang
+    }
+  ))), /* @__PURE__ */ React.createElement("div", { className: "form-section", style: { background: "var(--bg-1)", border: "1px solid var(--border-1)", borderRadius: 12, padding: 16, marginBottom: 10 } }, /* @__PURE__ */ React.createElement("p", { className: "form-section-label", style: { fontSize: 10, fontWeight: 700, color: "var(--amber)", letterSpacing: "0.2em", fontFamily: "var(--mono)", marginBottom: 12 } }, "PASSENGERS & TRIP"), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Passengers"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => setForm((p) => ({ ...p, passengers: String(Math.max(1, parseInt(p.passengers || 1) - 1)) })),
+      style: { width: 44, height: 44, borderRadius: 8, border: "1px solid var(--border-1)", background: "var(--bg-2)", color: "var(--white)", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }
+    },
+    "\u2212"
+  ), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, textAlign: "center", fontSize: 22, fontWeight: 700, color: "var(--white)", fontFamily: "var(--mono)" } }, form.passengers), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => setForm((p) => ({ ...p, passengers: String(Math.min(12, parseInt(p.passengers || 1) + 1)) })),
+      style: { width: 44, height: 44, borderRadius: 8, border: "1px solid var(--border-1)", background: "var(--bg-2)", color: "var(--amber)", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }
+    },
+    "+"
+  ))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Luggage"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => setForm((p) => ({ ...p, luggage: String(Math.max(0, parseInt(p.luggage || 0) - 1)) })),
+      style: { width: 44, height: 44, borderRadius: 8, border: "1px solid var(--border-1)", background: "var(--bg-2)", color: "var(--white)", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }
+    },
+    "\u2212"
+  ), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, textAlign: "center", fontSize: 22, fontWeight: 700, color: "var(--white)", fontFamily: "var(--mono)" } }, form.luggage), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => setForm((p) => ({ ...p, luggage: String(Math.min(12, parseInt(p.luggage || 0) + 1)) })),
+      style: { width: 44, height: 44, borderRadius: 8, border: "1px solid var(--border-1)", background: "var(--bg-2)", color: "var(--amber)", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }
+    },
+    "+"
+  )))), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 } }, [["one-way", "One Way \u2192"], ["round-trip", "Round Trip \u21C4"]].map(([t, label]) => /* @__PURE__ */ React.createElement("button", { key: t, onClick: () => setForm((p) => ({ ...p, tripType: t })), style: {
+    padding: "14px 0",
+    borderRadius: 10,
+    border: form.tripType === t ? "2px solid var(--amber)" : "1px solid var(--border-1)",
+    background: form.tripType === t ? "rgba(245,166,35,0.1)" : "var(--bg-2)",
+    color: form.tripType === t ? "var(--amber)" : "var(--slate)",
+    fontSize: 14,
+    fontWeight: 700,
+    cursor: "pointer",
+    fontFamily: "var(--sans)",
+    transition: "all 0.15s"
+  } }, label))))), !priceCheckMode && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "form-section", style: { background: "var(--bg-1)", border: "1px solid var(--border-1)", borderRadius: 12, padding: 16, marginBottom: 10 } }, /* @__PURE__ */ React.createElement("p", { className: "form-section-label", style: { fontSize: 10, fontWeight: 700, color: "var(--amber)", letterSpacing: "0.2em", fontFamily: "var(--mono)", marginBottom: 12 } }, "DATE & TIME"), /* @__PURE__ */ React.createElement("div", { className: "resp-grid-2", style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement("div", { style: { position: "relative" } }, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "\u{1F4C5} Date"), /* @__PURE__ */ React.createElement("button", { "data-picker": true, onClick: () => setShowCal((v) => !v), style: {
     ...inputStyle,
     width: "100%",
     textAlign: "left",
     cursor: "pointer",
-    border: missingFields.includes("date") ? "1.5px solid #ff3a30" : showCal ? "1.5px solid #ff6b35" : inputStyle.border,
-    boxShadow: showCal ? "0 0 0 1px rgba(255,107,53,0.2)" : missingFields.includes("date") ? "0 0 0 1px rgba(255,58,48,0.2)" : "none",
+    border: missingFields.includes("date") ? "1.5px solid #ff3a30" : showCal ? `1.5px solid var(--amber)` : inputStyle.border,
+    boxShadow: showCal ? "0 0 0 1px rgba(245,166,35,0.2)" : missingFields.includes("date") ? "0 0 0 1px rgba(255,58,48,0.2)" : "none",
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
     fontFamily: "inherit",
     background: inputStyle.background
-  } }, /* @__PURE__ */ React.createElement("span", { style: { color: form.date ? "#e8e6e1" : "#7a8498" } }, form.date ? (/* @__PURE__ */ new Date(form.date + "T12:00:00")).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" }) : "Select date"), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "#8892a8" } }, showCal ? "\u25B2" : "\u25BC")), showCal && (() => {
+  } }, /* @__PURE__ */ React.createElement("span", { style: { color: form.date ? "#f0eef8" : "var(--slate-dim)" } }, form.date ? (/* @__PURE__ */ new Date(form.date + "T12:00:00")).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }) : "Select date"), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "var(--slate-dim)" } }, showCal ? "\u25B2" : "\u25BC")), showCal && (() => {
     const today = /* @__PURE__ */ new Date();
     today.setHours(0, 0, 0, 0);
     const todayStr = today.toISOString().split("T")[0];
@@ -2961,10 +3153,62 @@ Rules:
         boxShadow: isAirportTrip && missingFields.includes("flightNumber") ? "0 0 0 1px rgba(255,58,48,0.2)" : "none"
       }
     }
-  )), /* @__PURE__ */ React.createElement(Field, { label: "Passengers", value: form.passengers, onChange: (v) => setForm((p) => ({ ...p, passengers: sanitizeInteger(v, 1, 99) })), type: "number" }), /* @__PURE__ */ React.createElement(Field, { label: "Luggage", value: form.luggage, onChange: (v) => setForm((p) => ({ ...p, luggage: sanitizeInteger(v, 0, 99) })), type: "number" })), /* @__PURE__ */ React.createElement("div", { className: "resp-grid-2", style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Trip Type"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6 } }, ["one-way", "round-trip"].map((t) => /* @__PURE__ */ React.createElement("button", { key: t, onClick: () => setForm((p) => ({ ...p, tripType: t })), style: { flex: 1, padding: "10px", borderRadius: 8, border: form.tripType === t ? "1px solid #ff3a30" : "1px solid #1e2028", background: form.tripType === t ? "rgba(255,58,48,0.1)" : "#0d0e12", color: form.tripType === t ? "var(--amber)" : "#8892a8", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", textTransform: "capitalize" } }, t === "one-way" ? "One-Way \u2192" : "Round-Trip \u21C4")))), /* @__PURE__ */ React.createElement(Field, { label: "Payment ($)", value: form.paymentAmount, onChange: (v) => {
+  )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Passengers"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      className: "pax-step-btn",
+      onClick: () => setForm((p) => ({ ...p, passengers: String(Math.max(1, parseInt(p.passengers || 1) - 1)) })),
+      style: { width: 44, height: 44, borderRadius: 8, border: "1px solid var(--border-1)", background: "var(--bg-2)", color: "var(--white)", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }
+    },
+    "\u2212"
+  ), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, textAlign: "center", fontSize: 22, fontWeight: 700, color: "var(--white)", fontFamily: "var(--mono)" } }, form.passengers), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      className: "pax-step-btn",
+      onClick: () => setForm((p) => ({ ...p, passengers: String(Math.min(12, parseInt(p.passengers || 1) + 1)) })),
+      style: { width: 44, height: 44, borderRadius: 8, border: "1px solid var(--border-1)", background: "var(--bg-2)", color: "var(--amber)", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }
+    },
+    "+"
+  ))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Luggage"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      className: "pax-step-btn",
+      onClick: () => setForm((p) => ({ ...p, luggage: String(Math.max(0, parseInt(p.luggage || 0) - 1)) })),
+      style: { width: 44, height: 44, borderRadius: 8, border: "1px solid var(--border-1)", background: "var(--bg-2)", color: "var(--white)", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }
+    },
+    "\u2212"
+  ), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, textAlign: "center", fontSize: 22, fontWeight: 700, color: "var(--white)", fontFamily: "var(--mono)" } }, form.luggage), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      className: "pax-step-btn",
+      onClick: () => setForm((p) => ({ ...p, luggage: String(Math.min(12, parseInt(p.luggage || 0) + 1)) })),
+      style: { width: 44, height: 44, borderRadius: 8, border: "1px solid var(--border-1)", background: "var(--bg-2)", color: "var(--amber)", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }
+    },
+    "+"
+  )))), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 } }, [["one-way", "One Way \u2192"], ["round-trip", "Round Trip \u21C4"]].map(([t, label]) => /* @__PURE__ */ React.createElement("button", { key: t, className: "trip-type-btn", onClick: () => setForm((p) => ({ ...p, tripType: t })), style: {
+    padding: "14px 0",
+    borderRadius: 10,
+    border: form.tripType === t ? "2px solid var(--amber)" : "1px solid var(--border-1)",
+    background: form.tripType === t ? "rgba(245,166,35,0.1)" : "var(--bg-2)",
+    color: form.tripType === t ? "var(--amber)" : "var(--slate)",
+    fontSize: 14,
+    fontWeight: 700,
+    cursor: "pointer",
+    fontFamily: "var(--sans)",
+    transition: "all 0.15s"
+  } }, label))), /* @__PURE__ */ React.createElement("div", { className: "resp-grid-2", style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 } }, /* @__PURE__ */ React.createElement(Field, { label: "Payment ($)", value: form.paymentAmount, onChange: (v) => {
     setForm((p) => ({ ...p, paymentAmount: v }));
     setPaymentManuallyEdited(true);
-  }, type: "number", highlight: missingFields.includes("paymentAmount") })), manualFare && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 10, padding: "8px 12px", borderRadius: 8, background: manualFare.found ? "rgba(80,200,80,0.06)" : "rgba(255,200,80,0.06)", border: `1px solid ${manualFare.found ? "#1a3a1a" : "#3a3a1a"}`, display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 14 } }, manualFare.found ? "\u{1F4B0}" : "\u2753"), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, color: manualFare.found ? "#8f8" : "#fc6" } }, manualFare.message), manualFare.found && form.tripType === "round-trip" && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "#c0c0c0", marginLeft: "auto" } }, "\xD72 round-trip"))), /* @__PURE__ */ React.createElement("div", { style: { background: "linear-gradient(135deg, #0f1118, #131620)", border: "1px solid #1a1d28", borderRadius: 14, padding: 18, marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, fontWeight: 700, color: "#3b9eff", letterSpacing: "0.1em" } }, "\u2708 FLIGHT STATUS & FARE ASSIST"), isStandaloneMode() && !aiLoading && !aiError && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#cccccc", background: "rgba(255,200,80,0.06)", padding: "6px 10px", borderRadius: 6, border: "1px solid #3a3a1a" } }, /* @__PURE__ */ React.createElement("span", null, "Website mode \u2014 AI flight lookup unavailable. "), /* @__PURE__ */ React.createElement("a", { href: form.flightNumber ? `https://flightaware.com/live/flight/${form.flightNumber.trim()}` : "https://flightaware.com", target: "_blank", rel: "noopener noreferrer", style: { color: "var(--amber)", fontWeight: 700, textDecoration: "none" } }, "Check on FlightAware \u2197")), aiLoading && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "#fc6", animation: "pulse 1s infinite" } }, "\u23F3 Searching... (", aiTimer, "s)")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
+  }, type: "number", highlight: missingFields.includes("paymentAmount") }), autoFareLabel && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 6, display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, fontFamily: "var(--mono)", color: paymentManuallyEdited ? "var(--slate-dim)" : "var(--green)", letterSpacing: "0.06em" } }, paymentManuallyEdited ? "\u270E " + autoFareLabel.replace("Auto:", "Override:") : "\u26A1 " + autoFareLabel), paymentManuallyEdited && /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => {
+        setPaymentManuallyEdited(false);
+      },
+      style: { fontSize: 10, fontFamily: "var(--mono)", color: "var(--amber)", background: "transparent", border: "none", cursor: "pointer", letterSpacing: "0.08em", padding: 0 }
+    },
+    "RESET"
+  )))), /* @__PURE__ */ React.createElement("div", { style: { background: "linear-gradient(135deg, #0f1118, #131620)", border: "1px solid #1a1d28", borderRadius: 14, padding: 18, marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, fontWeight: 700, color: "#3b9eff", letterSpacing: "0.1em" } }, "\u2708 FLIGHT STATUS & FARE ASSIST"), isStandaloneMode() && !aiLoading && !aiError && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#cccccc", background: "rgba(255,200,80,0.06)", padding: "6px 10px", borderRadius: 6, border: "1px solid #3a3a1a" } }, /* @__PURE__ */ React.createElement("span", null, "Website mode \u2014 AI flight lookup unavailable. "), /* @__PURE__ */ React.createElement("a", { href: form.flightNumber ? `https://flightaware.com/live/flight/${form.flightNumber.trim()}` : "https://flightaware.com", target: "_blank", rel: "noopener noreferrer", style: { color: "var(--amber)", fontWeight: 700, textDecoration: "none" } }, "Check on FlightAware \u2197")), aiLoading && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "#fc6", animation: "pulse 1s infinite" } }, "\u23F3 Searching... (", aiTimer, "s)")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: lookupFlightOnly,
@@ -3105,7 +3349,7 @@ Rules:
       setFormError("");
       setMissingFields([]);
     }, style: { background: "transparent", border: "none", color: "#c0c0c0", fontSize: 16, cursor: "pointer", flexShrink: 0 } }, "\u2715")), requiredList.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 8 } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 12, color: "#f88", fontWeight: 600, marginBottom: 6 } }, "Required:"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } }, requiredList.map((f) => /* @__PURE__ */ React.createElement("span", { key: f, style: { padding: "4px 10px", borderRadius: 6, background: "rgba(255,58,48,0.12)", border: "1px solid #3a1a1a", color: "#f88", fontSize: 13, fontWeight: 600 } }, "\u2717 ", f)))), optionalList.length > 0 && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 12, color: "#fc6", fontWeight: 600, marginBottom: 6 } }, isRequired ? "Also empty (optional):" : "Empty fields:"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } }, optionalList.map((f) => /* @__PURE__ */ React.createElement("span", { key: f, style: { padding: "4px 10px", borderRadius: 6, background: "rgba(255,200,80,0.08)", border: "1px solid #3a3a1a", color: "#fc6", fontSize: 13 } }, "\u25CB ", f)))), isRequired && /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, color: "#d0d8ec", fontWeight: 500, marginTop: 8 } }, "Fill in the red-highlighted fields above and try again."));
-  })(), /* @__PURE__ */ React.createElement("button", { onClick: handleSubmit, disabled: isSubmitting, "aria-label": isSubmitting ? "Saving booking" : editingBooking ? "Update booking" : "Confirm booking", style: { width: "100%", padding: 16, borderRadius: 12, border: "none", background: isSubmitting ? "#2a2d36" : "linear-gradient(135deg, #ff3a30, #ff6b35)", color: "#fff", fontSize: 16, fontWeight: 700, cursor: isSubmitting ? "not-allowed" : "pointer", fontFamily: "inherit", letterSpacing: "0.06em", boxShadow: isSubmitting ? "none" : "0 4px 20px rgba(255,58,48,0.3)", opacity: isSubmitting ? 0.6 : 1, transition: "all 0.2s" } }, isSubmitting ? "\u23F3 SAVING..." : editingBooking ? "UPDATE BOOKING \u2713" : "CONFIRM BOOKING \u2713"))), showConfirm && /* @__PURE__ */ React.createElement(
+  })(), /* @__PURE__ */ React.createElement("button", { onClick: handleSubmit, disabled: isSubmitting, className: "confirm-btn", "aria-label": isSubmitting ? "Saving booking" : editingBooking ? "Update booking" : "Confirm booking", style: { width: "100%", padding: 16, borderRadius: 12, border: "none", background: isSubmitting ? "var(--bg-2)" : "linear-gradient(135deg, #c47a0a, var(--amber))", color: isSubmitting ? "var(--slate)" : "#000", fontSize: 16, fontWeight: 800, cursor: isSubmitting ? "not-allowed" : "pointer", fontFamily: "var(--display)", letterSpacing: "0.1em", boxShadow: isSubmitting ? "none" : "0 4px 24px rgba(245,166,35,0.3)", opacity: isSubmitting ? 0.6 : 1, transition: "all 0.2s" } }, isSubmitting ? "\u23F3 SAVING..." : editingBooking ? "UPDATE BOOKING \u2713" : "CONFIRM BOOKING \u2713")))), showConfirm && /* @__PURE__ */ React.createElement(
     "div",
     {
       role: "dialog",
@@ -4294,20 +4538,16 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
 
   // Poll for React — runs after runDispatchApp is defined
   (function waitForReact(tries) {
-    console.log("[DispatchHQ] waitForReact tries=" + tries + " React=" + (typeof React) + " ReactDOM=" + (typeof ReactDOM));
     if (typeof React !== "undefined" && typeof ReactDOM !== "undefined") {
-      console.log("[DispatchHQ] React loaded — calling runDispatchApp");
       try {
         runDispatchApp();
       } catch(e) {
-        console.error("[DispatchHQ] runDispatchApp error:", e);
-        document.getElementById("splash").style.display = "none";
+          document.getElementById("splash").style.display = "none";
         document.getElementById("load-error").style.display = "flex";
       }
       return;
     }
     if (tries <= 0) {
-      console.error("[DispatchHQ] All CDNs failed — showing error");
       document.getElementById("splash").style.display = "none";
       document.getElementById("load-error").style.display = "flex";
       return;
