@@ -1,13 +1,1 @@
-name: Deploy to Netlify
-on:
-  push:
-    branches: [master]
-    paths:
-      - dispatch-hq.html
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: npm install -g netlify-cli
-      - run: netlify deploy --prod --dir . --auth "${{ secrets.NETLIFY_AUTH_TOKEN }}" --site "${{ secrets.NETLIFY_SITE_ID }}"
+﻿name: Deploy to Netlify`non:`n  push:`n    branches: [master]`n    paths:`n      - dispatch-hq.html`njobs:`n  deploy:`n    runs-on: ubuntu-latest`n    steps:`n      - uses: actions/checkout@v4`n      - run: npm install -g netlify-cli`n      - run: netlify deploy --prod --dir . --auth "${{ secrets.NETLIFY_AUTH_TOKEN }}" --site "${{ secrets.NETLIFY_SITE_ID }}"
