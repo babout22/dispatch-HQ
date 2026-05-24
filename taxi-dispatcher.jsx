@@ -2657,17 +2657,15 @@ Rules:
         </nav>
       </header>
 
-      {/* ── Bottom Nav (iPhone only) ── */}
-      <nav role="navigation" aria-label="Main navigation" className="bottom-nav" style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 200, background: "rgba(9,21,8,0.97)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", borderTop: "1px solid var(--border-0)", alignItems: "stretch", justifyContent: "space-around", paddingBottom: "env(safe-area-inset-bottom)" }}>
-        {[["booking","📋","BOOK"],["dashboard","📊","DASH"],["drivers","🚗","FLEET"],["sync","☁️","SYNC"],["backup","💾","BAK"]].map(([v, icon, label]) => (
-          <button key={v} onClick={() => setView(v)} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2, border: "none", background: view === v ? "rgba(240,165,0,0.06)" : "transparent", color: view === v ? "var(--amber)" : "#4a6a4c", fontFamily: "var(--mono)", fontSize: 9, fontWeight: view === v ? 700 : 500, letterSpacing: "0.06em", cursor: "pointer", padding: "8px 0", borderTop: view === v ? "2px solid var(--amber)" : "2px solid transparent", transition: "all 0.15s" }}>
-            <span style={{ fontSize: 20, lineHeight: 1 }}>{icon}</span>
-            <span>{label}</span>
+      {/* ── Bottom Nav — iPhone only, 44px icons ── */}
+      <nav role="navigation" aria-label="Main navigation" className="bottom-nav">
+        {[["booking","📋"],["dashboard","📊"],["drivers","🚗"],["sync","☁️"],["backup","💾"]].map(([v, icon]) => (
+          <button key={v} onClick={() => setView(v)} className={`bottom-nav-btn${view === v ? " active" : ""}`} aria-label={v}>
+            <span className="nav-icon">{icon}</span>
           </button>
         ))}
-        <button onClick={() => clearSession()} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2, border: "none", background: "transparent", color: "#4a6a4c", fontFamily: "var(--mono)", fontSize: 9, fontWeight: 500, letterSpacing: "0.06em", cursor: "pointer", padding: "8px 0", borderTop: "2px solid transparent" }}>
-          <span style={{ fontSize: 20, lineHeight: 1 }}>🚪</span>
-          <span>EXIT</span>
+        <button onClick={() => clearSession()} className="bottom-nav-btn" aria-label="Sign out">
+          <span className="nav-icon">🚪</span>
         </button>
       </nav>
 
@@ -4578,21 +4576,32 @@ function AdminDashboard({ currentUser, endpointUrl, onSignOut }) {
   const cardStyle = { background: "var(--bg-1)", border: "1px solid #1e2028", borderRadius: 12, padding: "14px 18px" };
 
   return (
-    <div style={{ minHeight: "100vh", background: "var(--bg-0)", color: "var(--text-1)", fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif" }}>
+    <div style={{ minHeight: "100vh", background: "var(--bg-0)", color: "var(--text-1)", fontFamily: "var(--sans)" }}>
       {/* Header */}
-      <div style={{ background: "linear-gradient(90deg, #12141a, #0f1016)", borderBottom: "1px solid #1e2028", padding: "14px 24px", display: "flex", alignItems: "center", gap: 12 }}>
-        <span style={{ fontSize: 24 }}>🚖</span>
+      <div className="safe-header" style={{ background: "rgba(9,21,8,0.97)", borderBottom: "1px solid var(--border-0)", padding: "0 16px", display: "flex", alignItems: "center", gap: 12, minHeight: 54, position: "sticky", top: 0, zIndex: 100, boxShadow: "0 1px 0 rgba(76,175,106,0.1)" }}>
+        <div style={{ width: 28, height: 28, borderRadius: 7, background: "linear-gradient(135deg, #8a6000, var(--amber))", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>🚖</div>
         <div style={{ flex: 1 }}>
-          <p style={{ fontSize: 16, fontWeight: 800, color: "#fff", margin: 0, letterSpacing: "0.04em" }}>DISPATCH HQ</p>
-          <p style={{ fontSize: 12, color: "var(--green)", margin: 0, fontWeight: 600 }}>Admin Dashboard</p>
+          <p style={{ fontSize: 15, fontWeight: 700, color: "var(--amber)", margin: 0, letterSpacing: "0.1em", fontFamily: "var(--display)" }}>DISPATCH HQ</p>
+          <p style={{ fontSize: 10, color: "var(--green)", margin: 0, fontWeight: 500, fontFamily: "var(--mono)", letterSpacing: "0.12em" }}>ADMIN DASHBOARD</p>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ fontSize: 13, color: "var(--text-2)" }}>👤 {currentUser.displayName}</span>
-          <button onClick={onSignOut} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid var(--border-0)", background: "transparent", color: "var(--text-2)", fontSize: 13, fontWeight: 500, cursor: "pointer", fontFamily: "var(--sans)" }}>Sign Out</button>
+          <span style={{ fontSize: 12, color: "var(--text-3)", fontFamily: "var(--mono)" }}>👤 {currentUser.displayName}</span>
+          <button onClick={onSignOut} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid var(--border-0)", background: "transparent", color: "var(--text-2)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "var(--mono)", letterSpacing: "0.08em" }}>EXIT</button>
         </div>
       </div>
 
-      <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px 20px" }}>
+      {/* Bottom nav for admin on mobile */}
+      <nav role="navigation" aria-label="Admin navigation" className="bottom-nav">
+        <button onClick={onSignOut} className="bottom-nav-btn" aria-label="Sign out" style={{ flex: 1 }}>
+          <span className="nav-icon">🚪</span>
+        </button>
+        <div className="bottom-nav-btn" style={{ flex: 3, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--amber)", fontSize: 11, fontFamily: "var(--mono)", letterSpacing: "0.1em", fontWeight: 700, borderTop: "none" }}>
+          ADMIN PANEL
+        </div>
+        <div className="bottom-nav-btn" style={{ flex: 1 }} />
+      </nav>
+
+      <div className="safe-main" style={{ maxWidth: 900, margin: "0 auto", padding: "20px 16px" }}>
         {/* Stats row */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 24 }}>
           {[
