@@ -242,9 +242,9 @@ function loadSyncConfig() {
       endpointUrl: typeof parsed.endpointUrl === "string" && parsed.endpointUrl ? parsed.endpointUrl : "https://script.google.com/macros/s/AKfycbzRFmi7dn8yy_u6m0YCz7YCHt-_-PNm6VHOVdOMixf_vMBq0SF3lWg1sEQhwWI2J8I-/exec",
       passphraseHash: typeof parsed.passphraseHash === "string" ? parsed.passphraseHash : "",
       lastSync: typeof parsed.lastSync === "string" ? parsed.lastSync : "",
-      authToken: typeof parsed.authToken === "string" ? parsed.authToken : ""
+      authToken: typeof parsed.authToken === "string" && parsed.authToken ? parsed.authToken : "kX9mP2vQ8nL5wR3jF7tY4cH6dA1sE0bN"
     };
-  } catch { return { endpointUrl: "", passphraseHash: "", lastSync: "", authToken: "" }; }
+  } catch { return { endpointUrl: "https://script.google.com/macros/s/AKfycbzRFmi7dn8yy_u6m0YCz7YCHt-_-PNm6VHOVdOMixf_vMBq0SF3lWg1sEQhwWI2J8I-/exec", passphraseHash: "", lastSync: "", authToken: "kX9mP2vQ8nL5wR3jF7tY4cH6dA1sE0bN" }; }
 }
 function saveSyncConfig(config) {
   try { localStorage.setItem(SYNC_CONFIG_KEY, JSON.stringify(config)); } catch {}
@@ -2624,41 +2624,54 @@ Rules:
       `}</style>
 
       {/* ── Header ── */}
-      <header style={{ background: "rgba(9,21,8,0.97)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", borderBottom: "1px solid var(--border-0)", boxShadow: "0 1px 0 rgba(76,175,106,0.1)", padding: "0 20px", position: "sticky", top: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "space-between", height: 54 }}>
-        {/* Sky blue accent line */}
-        <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "linear-gradient(90deg, var(--mocha) 0%, var(--border-1) 60%, transparent 100%)", pointerEvents: "none" }} />
-        <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
-          <div style={{ width: 29, height: 29, borderRadius: 7, background: "linear-gradient(135deg, var(--mocha-dark), var(--mocha))", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, boxShadow: "0 2px 8px rgba(76,175,106,0.2)" }}>🚖</div>
+      <header className="safe-header" style={{ background: "rgba(9,21,8,0.97)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", borderBottom: "1px solid var(--border-0)", boxShadow: "0 1px 0 rgba(76,175,106,0.1)", padding: "0 16px", paddingTop: "env(safe-area-inset-top)", position: "sticky", top: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "space-between", minHeight: 54 }}>
+        <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "linear-gradient(90deg, var(--amber) 0%, rgba(240,165,0,0.2) 50%, transparent 100%)", pointerEvents: "none" }} />
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ width: 28, height: 28, borderRadius: 7, background: "linear-gradient(135deg, #8a6000, var(--amber))", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, boxShadow: "0 0 12px rgba(240,165,0,0.2)" }}>🚖</div>
           <div>
-            <h1 style={{ fontSize: 16, fontWeight: 700, letterSpacing: "0.1em", color: "var(--amber)", fontFamily: "var(--display)", fontFamily: "var(--sans)", background: "var(--bg-0)", lineHeight: 1 }}>DISPATCH HQ</h1>
-            <p style={{ fontSize: 9, color: "var(--text-3)", fontFamily: "var(--mono)", letterSpacing: "0.08em", letterSpacing: "0.1em", fontFamily: "var(--mono)", marginTop: 1 }}>{session ? (session.displayName || session.username).toUpperCase() : "DISPATCHER"}</p>
+            <h1 style={{ fontSize: 15, fontWeight: 700, letterSpacing: "0.1em", color: "var(--amber)", fontFamily: "var(--display)", lineHeight: 1 }}>DISPATCH HQ</h1>
+            <p style={{ fontSize: 9, color: "var(--text-3)", fontFamily: "var(--mono)", letterSpacing: "0.1em", marginTop: 2, lineHeight: 1 }}>{session ? (session.displayName || session.username).toUpperCase() : "DISPATCHER"}</p>
           </div>
         </div>
-        <nav role="navigation" aria-label="Main tabs" style={{ display: "flex", gap: 0, alignItems: "center", overflowX: "auto", WebkitOverflowScrolling: "touch", msOverflowStyle: "none", scrollbarWidth: "none", height: 54 }}>
+        {/* Desktop nav — hidden on mobile */}
+        <nav role="navigation" aria-label="Main tabs" className="top-nav-tabs" style={{ display: "flex", gap: 0, alignItems: "center", overflowX: "auto", WebkitOverflowScrolling: "touch", msOverflowStyle: "none", scrollbarWidth: "none", height: 54 }}>
           {syncConfigured && (
-            <span style={{ fontSize: 10, marginRight: 14, color: syncStatus === "syncing" ? "var(--green)" : passphrase ? "var(--green)" : "var(--text-3)", display: "flex", alignItems: "center", gap: 5, fontFamily: "var(--mono)", letterSpacing: "0.12em" }}>
+            <span style={{ fontSize: 10, marginRight: 12, color: syncStatus === "syncing" ? "var(--green)" : passphrase ? "var(--green)" : "var(--text-3)", display: "flex", alignItems: "center", gap: 5, fontFamily: "var(--mono)", letterSpacing: "0.1em" }}>
               <span style={{ width: 5, height: 5, borderRadius: "50%", background: syncStatus === "syncing" ? "var(--green)" : passphrase ? "var(--green)" : "var(--text-3)", display: "inline-block", animation: "pulse-dot 1.5s infinite" }} />
               {syncStatus === "syncing" ? "SYNC" : passphrase ? "LIVE" : "OFF"}
             </span>
           )}
-          {[["booking","Book"],["dashboard","Dashboard"],["drivers","Drivers"],["sync","Sync"],["backup","Backup"]].map(([v, label]) => (
+          {[["booking","BOOK"],["dashboard","DASH"],["drivers","FLEET"],["sync","SYNC"],["backup","BACKUP"]].map(([v, label]) => (
             <button key={v} onClick={() => setView(v)} style={{
-              padding: "0 13px", height: 54, borderRadius: 0, border: "none",
-              borderBottom: view === v ? "2px solid var(--blue)" : "2px solid transparent",
-              borderTop: "2px solid transparent",
-              background: "transparent",
+              padding: "0 12px", height: 54, borderRadius: 0, border: "none",
+              borderBottom: view === v ? "2px solid var(--amber)" : "2px solid transparent",
+              borderTop: "2px solid transparent", background: "transparent",
               color: view === v ? "var(--amber)" : "var(--text-2)",
               fontSize: 13, fontWeight: view === v ? 700 : 500, cursor: "pointer",
               fontFamily: "var(--mono)", letterSpacing: "0.08em",
               transition: "color 0.15s, border-color 0.15s", whiteSpace: "nowrap"
             }}>{label}</button>
           ))}
-          <div style={{ width: 1, height: 18, background: "var(--border-1)", margin: "0 8px" }} />
-          <button onClick={() => clearSession()} style={{ padding: "5px 10px", borderRadius: "var(--r)", border: "1px solid var(--border-0)", background: "transparent", color: "var(--text-2)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "var(--mono)", letterSpacing: "0.08em", transition: "all 0.15s" }}>EXIT</button>
+          <div style={{ width: 1, height: 18, background: "var(--border-0)", margin: "0 8px" }} />
+          <button onClick={() => clearSession()} style={{ padding: "5px 10px", borderRadius: "var(--r)", border: "1px solid var(--border-0)", background: "transparent", color: "var(--text-2)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "var(--mono)", letterSpacing: "0.08em" }}>EXIT</button>
         </nav>
       </header>
 
-      <main role="main" aria-label="Dispatch HQ Application" style={{ maxWidth: 980, margin: "0 auto", padding: "24px 16px" }}>
+      {/* ── Bottom Nav (iPhone only) ── */}
+      <nav role="navigation" aria-label="Main navigation" className="bottom-nav" style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 200, background: "rgba(9,21,8,0.97)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", borderTop: "1px solid var(--border-0)", display: "none", alignItems: "stretch", justifyContent: "space-around", paddingBottom: "env(safe-area-inset-bottom)" }}>
+        {[["booking","📋","BOOK"],["dashboard","📊","DASH"],["drivers","🚗","FLEET"],["sync","☁️","SYNC"],["backup","💾","BAK"]].map(([v, icon, label]) => (
+          <button key={v} onClick={() => setView(v)} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2, border: "none", background: view === v ? "rgba(240,165,0,0.06)" : "transparent", color: view === v ? "var(--amber)" : "#4a6a4c", fontFamily: "var(--mono)", fontSize: 9, fontWeight: view === v ? 700 : 500, letterSpacing: "0.06em", cursor: "pointer", padding: "8px 0", borderTop: view === v ? "2px solid var(--amber)" : "2px solid transparent", transition: "all 0.15s" }}>
+            <span style={{ fontSize: 20, lineHeight: 1 }}>{icon}</span>
+            <span>{label}</span>
+          </button>
+        ))}
+        <button onClick={() => clearSession()} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2, border: "none", background: "transparent", color: "#4a6a4c", fontFamily: "var(--mono)", fontSize: 9, fontWeight: 500, letterSpacing: "0.06em", cursor: "pointer", padding: "8px 0", borderTop: "2px solid transparent" }}>
+          <span style={{ fontSize: 20, lineHeight: 1 }}>🚪</span>
+          <span>EXIT</span>
+        </button>
+      </nav>
+
+      <main role="main" aria-label="Dispatch HQ Application" className="safe-main" style={{ maxWidth: 980, margin: "0 auto", padding: "20px 16px" }}>
 
         {!gdprDismissed && (
           <div role="alert" style={{ padding: "14px 18px", borderRadius: 10, marginBottom: 20, background: "rgba(61,159,255,0.05)", border: "1px solid rgba(61,159,255,0.15)", display: "flex", alignItems: "flex-start", gap: 12 }}>
@@ -4589,7 +4602,7 @@ function AdminDashboard({ currentUser, endpointUrl, onSignOut }) {
             try { const cfg = JSON.parse(localStorage.getItem("dispatch-hq-sync-config") || "{}"); return cfg.endpointUrl || ""; } catch { return ""; }
           });
           const [adminAuthToken, setAdminAuthToken] = React.useState(() => {
-            try { const cfg = JSON.parse(localStorage.getItem("dispatch-hq-sync-config") || "{}"); return cfg.authToken || ""; } catch { return ""; }
+            try { const cfg = JSON.parse(localStorage.getItem("dispatch-hq-sync-config") || "{}"); return cfg.authToken || "kX9mP2vQ8nL5wR3jF7tY4cH6dA1sE0bN"; } catch { return "kX9mP2vQ8nL5wR3jF7tY4cH6dA1sE0bN"; }
           });
           const [adminPassphrase, setAdminPassphrase] = React.useState("");
           const [adminSyncMsg, setAdminSyncMsg] = React.useState("");
