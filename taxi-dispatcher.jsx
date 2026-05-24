@@ -4213,8 +4213,8 @@ Rules:
 
 // ── Subcomponents ──
 
-const labelStyle = { display: "block", fontSize: 12, fontWeight: 600, color: "var(--text-3)", letterSpacing: "0.14em", textTransform: "uppercase", marginBottom: 6, fontFamily: "var(--mono)" };
-const inputStyle = { width: "100%", padding: "12px 14px", borderRadius: 8, border: "1px solid #1c2035", background: "var(--bg-1)", color: "var(--text-1)", fontSize: 16, fontFamily: "var(--sans)", outline: "none", transition: "border-color 0.15s, box-shadow 0.15s" };
+const labelStyle = { display: "block", fontSize: 10, fontWeight: 500, color: "var(--green)", letterSpacing: "0.16em", textTransform: "uppercase", marginBottom: 5, fontFamily: "var(--mono)", lineHeight: 1.2 };
+const inputStyle = { width: "100%", padding: "11px 13px", borderRadius: 6, border: "1px solid var(--border-1)", background: "#fff", color: "#1a0a00", fontSize: 15, fontWeight: 600, fontFamily: "var(--sans)", outline: "none", transition: "border-color 0.15s, box-shadow 0.15s", lineHeight: 1.4 };
 
 // ────────────────────────────────────────────────────────
 // LOGIN PAGE
@@ -4286,7 +4286,7 @@ function LoginPage({ endpointUrl: initialEndpointUrl, onLogin, onSaveEndpoint })
     } finally { setLoading(false); }
   }
 
-  const inp = { background: "var(--bg-1)", border: "1.5px solid var(--border-0)", borderRadius: 8, color: "var(--text-1)", fontSize: 15, padding: "11px 14px", width: "100%", outline: "none", fontFamily: "var(--sans)", boxSizing: "border-box", transition: "border-color 0.15s, box-shadow 0.15s", boxShadow: "0 1px 0 rgba(76,175,106,0.1)" };
+  const inp = { background: "#fff", border: "1px solid var(--border-1)", borderRadius: 6, color: "#1a0a00", fontSize: 15, fontWeight: 600, padding: "10px 12px", width: "100%", outline: "none", fontFamily: "var(--sans)", boxSizing: "border-box", transition: "border-color 0.15s, box-shadow 0.15s", lineHeight: 1.4 };
   const btn = { width: "100%", padding: "13px", borderRadius: 10, border: "none", fontSize: 17, fontWeight: 700, cursor: "pointer", fontFamily: "var(--sans)", transition: "all 0.2s", letterSpacing: "0.03em" };
   const lbl = { display: "block", fontSize: 10, fontWeight: 500, color: "var(--green)", letterSpacing: "0.16em", textTransform: "uppercase", marginBottom: 6, fontFamily: "var(--mono)", lineHeight: 1.2 };
 
@@ -4870,7 +4870,7 @@ function DevicePassphraseGate({ onUnlocked, isFirstTime }) {
     }
   };
 
-  const inp = { background: "var(--bg-1)", border: "1px solid #1e2028", borderRadius: 8, color: "var(--text-1)", fontSize: 15, padding: "12px 14px", width: "100%", outline: "none", fontFamily: "inherit", boxSizing: "border-box" };
+  const inp = { background: "#fff", border: "1px solid var(--border-1)", borderRadius: 6, color: "#1a0a00", fontSize: 15, fontWeight: 600, padding: "10px 12px", width: "100%", outline: "none", fontFamily: "var(--sans)", boxSizing: "border-box", lineHeight: 1.4 };
 
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg-0)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
