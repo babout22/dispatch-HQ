@@ -1295,7 +1295,7 @@ function DispatcherApp({ session, onLogout }) {
   // Auto-load Maps if key already stored
   useEffect(() => {
     const key = loadMapsKey();
-    if (key) ensureMapsLoaded(key, ok => setMapsReady(ok));
+    if (key) setMapsReady(true); // proxy doesn't need SDK loaded
   }, []);
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
   const [formError, setFormError] = useState("");
@@ -5161,38 +5161,21 @@ function AddressField({ label, value, onChange, highlight, mapsReady, speechLang
     return () => document.removeEventListener("mousedown", h);
   }, []);
 
-  // ── Google Places autocomplete — supports both new and legacy API ──
+  // ── Google Places autocomplete via Netlify proxy ──
   const fetchSuggestions = ucb(async (text) => {
-    if (!mapsReady || !text || text.length < 2) { setSuggestions([]); return; }
-    if (!window.google) return;
-
+    if (!text || text.length < 2) { setSuggestions([]); return; }
     try {
-      // Try new Places API first (google.maps.places.AutocompleteSuggestion)
-      if (window.google.maps.places.AutocompleteSuggestion) {
-        const { suggestions } = await window.google.maps.places.AutocompleteSuggestion.fetchAutocompleteSuggestions({
-          input: text,
-          includedRegionCodes: ["us"],
-        });
-        setSuggestions(suggestions.slice(0, 5).map(s => ({
-          description: s.placePrediction.text.text,
-          place_id: s.placePrediction.placeId
-        })));
-        return;
+      const resp = await fetch(`/.netlify/functions/places?input=${encodeURIComponent(text)}`, {
+        signal: AbortSignal.timeout(5000)
+      });
+      const data = await resp.json();
+      if (data.predictions && data.predictions.length > 0) {
+        setSuggestions(data.predictions);
+      } else {
+        setSuggestions([]);
       }
-    } catch {}
-
-    // Fallback to legacy AutocompleteService
-    try {
-      if (!svcRef.current) svcRef.current = new window.google.maps.places.AutocompleteService();
-      svcRef.current.getPlacePredictions(
-        { input: text, componentRestrictions: { country: "us" }, types: ["geocode","establishment"] },
-        (results, status) => {
-          if (status === "OK" && results) setSuggestions(results.slice(0, 5));
-          else setSuggestions([]);
-        }
-      );
     } catch { setSuggestions([]); }
-  }, [mapsReady]);
+  }, []);
 
   const handleChange = (v) => {
     onChange(v); setActiveIdx(-1);
