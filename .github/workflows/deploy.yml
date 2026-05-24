@@ -11,4 +11,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: npm install -g netlify-cli
-      - run: netlify deploy --prod --dir . --auth ${{ secrets.NETLIFY_AUTH_TOKEN }} --site ${{ secrets.NETLIFY_SITE_ID }}
+      - run: netlify deploy --prod --dir . --auth ${{ secrets.NETLIFY_AUTH_TOKEN }} --site 6303731e-02f6-4a6d-97a2-77b1ac626ee1
