@@ -264,7 +264,7 @@ function ensureMapsLoaded(apiKey, cb) {
   if (mapsLoadState === "loading") return;
   mapsLoadState = "loading";
   const s = document.createElement("script");
-  s.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`;
+  s.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places&loading=async&v=weekly`;
   s.async = true;
   s.onload = () => { mapsLoadState = "ready"; mapsReadyCbs.forEach(f => f(true)); mapsReadyCbs = []; };
   s.onerror = () => { mapsLoadState = "error"; mapsReadyCbs.forEach(f => f(false)); mapsReadyCbs = []; };
@@ -666,53 +666,40 @@ function executeFare(input) {
 }
 
 async function executeFlight(input) {
-  if (isStandaloneMode()) {
-    return { error: "Flight lookup requires the Claude.ai app. On this website, enter flight details manually.", status: "unavailable" };
-  }
   const fn = (input.flight_number || "").toUpperCase().replace(/\s+/g, "");
-  const query = fn
-    ? `${fn} flight status today ${input.date || ""}`
-    : `${input.airline || ""} flights ${input.city || ""} status today ${input.date || ""}`;
+  if (!fn) return { error: "No flight number provided", status: "error" };
+
   try {
-    const resp = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 1000,
-        system: `You are a flight status assistant. Search for the flight and return ONLY a JSON object (no markdown, no backticks, no explanation before or after). Fields:
-flight_number (string, IATA like "KE81"), airline (string), origin_city (string), origin_code (3-letter IATA), destination_city (string), destination_code (3-letter IATA), scheduled_departure (time string), scheduled_arrival (time string), actual_departure (time or null), actual_arrival (time or null), status (one of: "on-time","delayed","cancelled","landed","in-air","scheduled","unknown"), delay_minutes (integer or 0), terminal (string or null), gate (string or null), aircraft_type (string or null).
-If you cannot find the specific flight, still return the JSON with status "unknown" and fill what you can from the search.`,
-        messages: [{ role: "user", content: `Find current status for: ${query}` }],
-        tools: [{ type: "web_search_20250305", name: "web_search" }]
-      })
+    const resp = await fetch(`/.netlify/functions/flight?flight=${encodeURIComponent(fn)}`, {
+      signal: AbortSignal.timeout(10000)
     });
-    if (!resp.ok) return { error: `API HTTP ${resp.status}`, status: "error" };
     const data = await resp.json();
-    // Check for API-level errors
-    if (data.type === "error") return { error: data.error?.message || "API error", status: "error" };
-    if (!data.content || !Array.isArray(data.content)) return { error: "Empty API response", status: "error" };
-    // Extract text blocks (web_search results are processed server-side)
-    const textParts = data.content.filter(b => b.type === "text").map(b => b.text);
-    const fullText = textParts.join("\n").trim();
-    if (!fullText) return { error: "No flight data returned from search", status: "error" };
-    try {
-      const cleaned = fullText.replace(/```json|```/g, "").trim();
-      // Find the JSON object in the response (sometimes there's preamble text)
-      // Extract first balanced JSON object
-      const jStart = cleaned.indexOf("{");
-      let jEnd = -1;
-      if (jStart >= 0) { let depth = 0; for (let i = jStart; i < cleaned.length; i++) { if (cleaned[i] === "{") depth++; else if (cleaned[i] === "}") { depth--; if (depth === 0) { jEnd = i; break; } } } }
-      if (jEnd <= jStart) return { error: "Could not parse flight data", status: "error" };
-      const parsed = JSON.parse(cleaned.slice(jStart, jEnd + 1));
-      // Normalize: ensure delay_minutes is a number
-      if (parsed.delay_minutes != null) parsed.delay_minutes = Number(parsed.delay_minutes) || 0;
-      // Ensure flight_number is uppercased
-      if (parsed.flight_number) parsed.flight_number = parsed.flight_number.toUpperCase().replace(/\s+/g, "");
-      return parsed;
-    } catch {
-      return { error: "Flight data format error", status: "error" };
+
+    if (!resp.ok || data.error) {
+      return { error: data.error || "Flight lookup failed", status: "error" };
     }
+    if (!data.found) {
+      return { error: "Flight not found", status: "unknown", flight_number: fn };
+    }
+
+    // Normalize to existing app format
+    return {
+      flight_number:      data.flight,
+      airline:            data.airline,
+      status:             data.statusRaw === "landed"    ? "landed"
+                        : data.statusRaw === "active"    ? "in-air"
+                        : data.statusRaw === "scheduled" ? "scheduled"
+                        : data.statusRaw === "cancelled" ? "cancelled"
+                        : data.statusRaw === "diverted"  ? "diverted"
+                        : "unknown",
+      delay_minutes:      data.delay || 0,
+      scheduled_arrival:  data.scheduledArrival || "",
+      actual_arrival:     data.actualArrival || "",
+      destination_code:   data.arrival || "",
+      origin_code:        data.departure || "",
+      message:            data.message || "",
+      found:              true,
+    };
   } catch (err) {
     return { error: "Flight lookup failed: " + err.message, status: "error" };
   }
@@ -2659,13 +2646,13 @@ Rules:
 
       {/* ── Bottom Nav — iPhone only, 44px icons ── */}
       <nav role="navigation" aria-label="Main navigation" className="bottom-nav">
-        {[["booking","📋"],["dashboard","📊"],["drivers","🚗"],["sync","☁️"],["backup","💾"]].map(([v, icon]) => (
+        {[["booking","BOOK"],["dashboard","DASH"],["drivers","FLEET"],["sync","SYNC"],["backup","BAK"]].map(([v, label]) => (
           <button key={v} onClick={() => setView(v)} className={`bottom-nav-btn${view === v ? " active" : ""}`} aria-label={v}>
-            <span className="nav-icon">{icon}</span>
+            <span>{label}</span>
           </button>
         ))}
         <button onClick={() => clearSession()} className="bottom-nav-btn" aria-label="Sign out">
-          <span className="nav-icon">🚪</span>
+          <span>EXIT</span>
         </button>
       </nav>
 
@@ -3061,7 +3048,7 @@ Rules:
                 {isStandaloneMode() && !aiLoading && !aiError && (
                 <div style={{ fontSize: 12, color: "var(--text-2)", background: "rgba(217,119,6,0.05)", padding: "6px 10px", borderRadius: 6, border: "1px solid #3a3a1a" }}>
                   <span>Website mode — AI flight lookup unavailable. </span>
-                  <a href={form.flightNumber ? `https://flightaware.com/live/flight/${form.flightNumber.trim()}` : "https://flightaware.com"} target="_blank" rel="noopener noreferrer" style={{ color: "var(--green)", fontWeight: 700, textDecoration: "none" }}>Check on FlightAware ↗</a>
+                  <span style={{ color: "var(--green)", fontSize: 11, fontFamily: "var(--mono)", letterSpacing: "0.06em" }}>✈ Live flight data via AviationStack</span>
                 </div>
               )}
               {aiLoading && <span style={{ fontSize: 12, color: "var(--amber)", animation: "pulse 1s infinite" }}>⏳ Searching... ({aiTimer}s)</span>}
@@ -4595,7 +4582,7 @@ function AdminDashboard({ currentUser, endpointUrl, onSignOut }) {
       {/* Bottom nav for admin on mobile */}
       <nav role="navigation" aria-label="Admin navigation" className="bottom-nav">
         <button onClick={onSignOut} className="bottom-nav-btn" aria-label="Sign out" style={{ flex: 1 }}>
-          <span className="nav-icon">🚪</span>
+          <span>EXIT</span>
         </button>
         <div className="bottom-nav-btn" style={{ flex: 3, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--amber)", fontSize: 11, fontFamily: "var(--mono)", letterSpacing: "0.1em", fontWeight: 700, borderTop: "none" }}>
           ADMIN PANEL
@@ -5174,15 +5161,37 @@ function AddressField({ label, value, onChange, highlight, mapsReady, speechLang
     return () => document.removeEventListener("mousedown", h);
   }, []);
 
-  // ── Google Places autocomplete ──
-  const fetchSuggestions = ucb((text) => {
+  // ── Google Places autocomplete — supports both new and legacy API ──
+  const fetchSuggestions = ucb(async (text) => {
     if (!mapsReady || !text || text.length < 2) { setSuggestions([]); return; }
-    if (!svcRef.current && window.google) svcRef.current = new window.google.maps.places.AutocompleteService();
-    if (!svcRef.current) return;
-    svcRef.current.getPlacePredictions(
-      { input: text, componentRestrictions: { country: "us" }, types: ["geocode","establishment"] },
-      (results, status) => { if (status === "OK" && results) setSuggestions(results.slice(0, 5)); else setSuggestions([]); }
-    );
+    if (!window.google) return;
+
+    try {
+      // Try new Places API first (google.maps.places.AutocompleteSuggestion)
+      if (window.google.maps.places.AutocompleteSuggestion) {
+        const { suggestions } = await window.google.maps.places.AutocompleteSuggestion.fetchAutocompleteSuggestions({
+          input: text,
+          includedRegionCodes: ["us"],
+        });
+        setSuggestions(suggestions.slice(0, 5).map(s => ({
+          description: s.placePrediction.text.text,
+          place_id: s.placePrediction.placeId
+        })));
+        return;
+      }
+    } catch {}
+
+    // Fallback to legacy AutocompleteService
+    try {
+      if (!svcRef.current) svcRef.current = new window.google.maps.places.AutocompleteService();
+      svcRef.current.getPlacePredictions(
+        { input: text, componentRestrictions: { country: "us" }, types: ["geocode","establishment"] },
+        (results, status) => {
+          if (status === "OK" && results) setSuggestions(results.slice(0, 5));
+          else setSuggestions([]);
+        }
+      );
+    } catch { setSuggestions([]); }
   }, [mapsReady]);
 
   const handleChange = (v) => {
