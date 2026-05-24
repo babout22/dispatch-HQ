@@ -2658,7 +2658,7 @@ Rules:
       </header>
 
       {/* ── Bottom Nav (iPhone only) ── */}
-      <nav role="navigation" aria-label="Main navigation" className="bottom-nav" style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 200, background: "rgba(9,21,8,0.97)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", borderTop: "1px solid var(--border-0)", display: "none", alignItems: "stretch", justifyContent: "space-around", paddingBottom: "env(safe-area-inset-bottom)" }}>
+      <nav role="navigation" aria-label="Main navigation" className="bottom-nav" style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 200, background: "rgba(9,21,8,0.97)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", borderTop: "1px solid var(--border-0)", alignItems: "stretch", justifyContent: "space-around", paddingBottom: "env(safe-area-inset-bottom)" }}>
         {[["booking","📋","BOOK"],["dashboard","📊","DASH"],["drivers","🚗","FLEET"],["sync","☁️","SYNC"],["backup","💾","BAK"]].map(([v, icon, label]) => (
           <button key={v} onClick={() => setView(v)} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2, border: "none", background: view === v ? "rgba(240,165,0,0.06)" : "transparent", color: view === v ? "var(--amber)" : "#4a6a4c", fontFamily: "var(--mono)", fontSize: 9, fontWeight: view === v ? 700 : 500, letterSpacing: "0.06em", cursor: "pointer", padding: "8px 0", borderTop: view === v ? "2px solid var(--amber)" : "2px solid transparent", transition: "all 0.15s" }}>
             <span style={{ fontSize: 20, lineHeight: 1 }}>{icon}</span>
@@ -4233,7 +4233,7 @@ const inputStyle = { width: "100%", padding: "11px 13px", borderRadius: 6, borde
 // LOGIN PAGE
 // ────────────────────────────────────────────────────────
 function LoginPage({ endpointUrl: initialEndpointUrl, onLogin, onSaveEndpoint }) {
-  const { useState: ust, useCallback: ucb, useRef: ur } = React;
+  const { useState: ust, useCallback: ucb, useRef: ur, useEffect: ue } = React;
   const [tab, setTab] = ust("signin");
   const [username, setUsername] = ust("");
   const [password, setPassword] = ust("");
@@ -4245,6 +4245,30 @@ function LoginPage({ endpointUrl: initialEndpointUrl, onLogin, onSaveEndpoint })
   const [showPass, setShowPass] = ust(false);
   const [endpointUrl, setEndpointUrl] = ust(initialEndpointUrl || "https://script.google.com/macros/s/AKfycbzRFmi7dn8yy_u6m0YCz7YCHt-_-PNm6VHOVdOMixf_vMBq0SF3lWg1sEQhwWI2J8I-/exec");
   const [showUrlField, setShowUrlField] = ust(false);
+  const [faceIdAvail, setFaceIdAvail] = ust(false);
+  const [faceIdUser, setFaceIdUser] = ust("");
+  const [faceIdLoading, setFaceIdLoading] = ust(false);
+  const [faceIdError, setFaceIdError] = ust("");
+  const FACEID_KEY = "dispatch-hq-faceid-cred";
+  const FACEID_USER_KEY = "dispatch-hq-faceid-user";
+  const FACEID_SESSION_KEY = "dispatch-hq-faceid-session";
+
+  // Check if WebAuthn + platform authenticator (Face ID) is available
+  ue(() => {
+    const saved = localStorage.getItem(FACEID_USER_KEY);
+    if (saved) setFaceIdUser(saved);
+    if (window.PublicKeyCredential) {
+      window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()
+        .then(ok => {
+          setFaceIdAvail(ok);
+          // Auto-trigger Face ID if credential exists
+          if (ok && saved && localStorage.getItem(FACEID_KEY)) {
+            setTimeout(() => handleFaceId(), 600);
+          }
+        })
+        .catch(() => setFaceIdAvail(false));
+    }
+  }, []);
 
   // Client-side pre-hash (SHA-256 via Web Crypto) before sending
   async function clientHash(password) {
@@ -4253,13 +4277,92 @@ function LoginPage({ endpointUrl: initialEndpointUrl, onLogin, onSaveEndpoint })
     return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
   }
 
+  // Register Face ID after successful password login
+  async function registerFaceId(userData) {
+    if (!faceIdAvail) return;
+    try {
+      const uid = crypto.getRandomValues(new Uint8Array(16));
+      const cred = await navigator.credentials.create({
+        publicKey: {
+          challenge: crypto.getRandomValues(new Uint8Array(32)),
+          rp: { name: "Dispatch HQ", id: location.hostname },
+          user: {
+            id: uid,
+            name: userData.username,
+            displayName: userData.displayName || userData.username
+          },
+          pubKeyCredParams: [{ alg: -7, type: "public-key" }, { alg: -257, type: "public-key" }],
+          authenticatorSelection: {
+            authenticatorAttachment: "platform",
+            userVerification: "required",
+            requireResidentKey: true
+          },
+          timeout: 60000,
+          attestation: "none"
+        }
+      });
+      // Store credential ID and saved session for Face ID re-auth
+      const credId = btoa(String.fromCharCode(...new Uint8Array(cred.rawId)));
+      localStorage.setItem(FACEID_KEY, credId);
+      localStorage.setItem(FACEID_USER_KEY, userData.username);
+      localStorage.setItem(FACEID_SESSION_KEY, JSON.stringify(userData));
+    } catch(e) {
+      // User cancelled or Face ID failed — skip silently
+    }
+  }
+
+  // Sign in with Face ID
+  async function handleFaceId() {
+    setFaceIdLoading(true); setFaceIdError("");
+    try {
+      const credIdStr = localStorage.getItem(FACEID_KEY);
+      if (!credIdStr) { setFaceIdError("Face ID not set up. Sign in with password first."); return; }
+      const credIdBytes = Uint8Array.from(atob(credIdStr), c => c.charCodeAt(0));
+      const assertion = await navigator.credentials.get({
+        publicKey: {
+          challenge: crypto.getRandomValues(new Uint8Array(32)),
+          rpId: location.hostname,
+          allowCredentials: [{ type: "public-key", id: credIdBytes }],
+          userVerification: "required",
+          timeout: 60000
+        }
+      });
+      if (assertion) {
+        // Face ID passed — restore saved session OR re-auth with server
+        const saved = localStorage.getItem(FACEID_SESSION_KEY);
+        if (saved) {
+          const sess = JSON.parse(saved);
+          // Re-validate session is still active with server
+          const url = endpointUrl.trim();
+          try {
+            const resp = await fetch(`${url}?action=validateSession&sessionToken=${sess.token}`, { signal: AbortSignal.timeout(5000) });
+            const data = await resp.json();
+            if (data.valid) {
+              onLogin(sess);
+              return;
+            }
+          } catch {}
+          // If server check fails, still allow via Face ID (offline mode)
+          onLogin(sess);
+        } else {
+          setFaceIdError("Session expired. Sign in with password to re-enable Face ID.");
+        }
+      }
+    } catch(e) {
+      if (e.name === "NotAllowedError") {
+        setFaceIdError("Face ID cancelled. Use password to sign in.");
+      } else {
+        setFaceIdError("Face ID failed. Use password instead.");
+      }
+    } finally { setFaceIdLoading(false); }
+  }
+
   async function handleSignIn(e) {
     e.preventDefault();
     if (!username.trim() || !password) { setError("Please enter your username and password."); return; }
     const url = endpointUrl.trim();
     if (!url) { setError("Enter your Google Sheets URL below first."); setShowUrlField(true); return; }
     if (!url.startsWith("https://script.google.com/")) { setError("URL must start with https://script.google.com/"); return; }
-    // Save the URL so it persists
     if (onSaveEndpoint) onSaveEndpoint(url);
     setLoading(true); setError(""); setSuccess("");
     try {
@@ -4270,7 +4373,10 @@ function LoginPage({ endpointUrl: initialEndpointUrl, onLogin, onSaveEndpoint })
       });
       const data = await resp.json();
       if (!data.success) { setError(data.error || "Sign in failed."); return; }
-      onLogin({ username: username.trim().toLowerCase(), role: data.role, displayName: data.displayName, token: data.token, expiresAt: data.expiresAt });
+      const userData = { username: username.trim().toLowerCase(), role: data.role, displayName: data.displayName, token: data.token, expiresAt: data.expiresAt };
+      // Register Face ID after successful login (required)
+      if (faceIdAvail) await registerFaceId(userData);
+      onLogin(userData);
     } catch(err) {
       setError("Could not reach server. Check your internet connection.");
     } finally { setLoading(false); }
@@ -4339,6 +4445,21 @@ function LoginPage({ endpointUrl: initialEndpointUrl, onLogin, onSaveEndpoint })
 
           {tab === "signin" ? (
             <form onSubmit={handleSignIn}>
+              {/* Face ID — shown when credential exists */}
+              {faceIdAvail && faceIdUser && (
+                <div style={{ marginBottom: 20 }}>
+                  <button type="button" onClick={handleFaceId} disabled={faceIdLoading} style={{ width: "100%", padding: "16px", borderRadius: 10, border: "2px solid var(--amber)", background: faceIdLoading ? "var(--bg-2)" : "rgba(240,165,0,0.06)", color: faceIdLoading ? "var(--text-3)" : "var(--amber)", fontSize: 16, fontWeight: 700, cursor: faceIdLoading ? "not-allowed" : "pointer", fontFamily: "var(--display)", letterSpacing: "0.1em", transition: "all 0.2s", display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
+                    <span style={{ fontSize: 26 }}>🔐</span>
+                    <span>{faceIdLoading ? "VERIFYING..." : "SIGN IN WITH FACE ID"}</span>
+                  </button>
+                  {faceIdError && <p style={{ fontSize: 12, color: "var(--red)", marginTop: 8, textAlign: "center", fontFamily: "var(--mono)" }}>{faceIdError}</p>}
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "16px 0 4px" }}>
+                    <div style={{ flex: 1, height: 1, background: "var(--border-0)" }} />
+                    <span style={{ fontSize: 10, color: "var(--text-3)", fontFamily: "var(--mono)", letterSpacing: "0.12em" }}>OR USE PASSWORD</span>
+                    <div style={{ flex: 1, height: 1, background: "var(--border-0)" }} />
+                  </div>
+                </div>
+              )}
               {/* Google Sheets URL */}
               {showUrlField ? (
                 <div style={{ marginBottom: 16 }}>
@@ -4364,9 +4485,12 @@ function LoginPage({ endpointUrl: initialEndpointUrl, onLogin, onSaveEndpoint })
                 <input style={inp} type={showPass ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" autoComplete="current-password" />
                 <button type="button" onClick={() => setShowPass(v => !v)} style={{ position: "absolute", right: 12, top: 28, background: "transparent", border: "none", color: "var(--text-3)", cursor: "pointer", fontSize: 14 }}>{showPass ? "👁" : "👁️"}</button>
               </div>
-              <button type="submit" disabled={loading} style={{ ...btn, background: loading ? "var(--bg-2)" : "linear-gradient(135deg, #ff3a20, #ff5c2b)", color: loading ? "var(--text-3)" : "#fff", boxShadow: loading ? "none" : "0 4px 20px rgba(76,175,106,0.25)" }}>
-                {loading ? "Signing in…" : "Sign In →"}
+              <button type="submit" disabled={loading} style={{ ...btn, background: loading ? "var(--bg-2)" : "var(--amber)", color: loading ? "var(--text-3)" : "#0a0a0a", boxShadow: loading ? "none" : "0 0 20px rgba(240,165,0,0.25)", fontFamily: "var(--display)", letterSpacing: "0.1em" }}>
+                {loading ? "SIGNING IN..." : "SIGN IN →"}
               </button>
+              {faceIdAvail && !faceIdUser && (
+                <p style={{ textAlign: "center", fontSize: 11, color: "var(--text-3)", marginTop: 10, fontFamily: "var(--mono)", letterSpacing: "0.06em" }}>🔒 Face ID will activate after your first sign in</p>
+              )}
               <p style={{ textAlign: "center", fontSize: 12, color: "var(--text-3)", marginTop: 16, marginBottom: 0, fontFamily: "var(--sans)" }}>No account? <button type="button" onClick={() => setTab("signup")} style={{ background: "none", border: "none", color: "var(--green)", cursor: "pointer", fontFamily: "var(--sans)", fontSize: 12, fontWeight: 600, textDecoration: "underline" }}>Request Access</button></p>
             </form>
           ) : (
