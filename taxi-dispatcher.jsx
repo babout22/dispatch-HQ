@@ -2587,7 +2587,7 @@ Rules:
 
   // Dispatcher: load bookings directly (local encryption pending user decision)
   return (
-    <div style={{ minHeight: "100vh", background: "var(--bg-0)", color: "var(--text-1)", fontFamily: "var(--sans)" }}>
+    <div style={{ minHeight: "100vh", background: "var(--bg-0)", color: "var(--text-1)", fontFamily: "var(--sans)", background: "var(--bg-0)" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Noto+Sans+KR:wght@300;400;500;700&display=swap');
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -2597,7 +2597,7 @@ Rules:
         input, select, textarea { font-family: inherit; }
         @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
         @keyframes slideUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes glow { 0%,100% { box-shadow: 0 0 8px rgba(96,165,250,0.3); } 50% { box-shadow: 0 0 20px rgba(139,94,60,0.35); } }
+        @keyframes glow { 0%,100% { box-shadow: 0 0 8px rgba(76,175,106,0.25); } 50% { box-shadow: 0 0 20px rgba(139,94,60,0.35); } }
         .card-enter { animation: slideUp 0.25s ease-out forwards; }
         .rec-pulse { animation: glow 1.2s ease-in-out infinite; }
         .booking-card-grid span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2624,20 +2624,20 @@ Rules:
       `}</style>
 
       {/* ── Header ── */}
-      <header style={{ background: "rgba(255,255,255,0.92)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", borderBottom: "1px solid var(--border-0)", boxShadow: "var(--shadow-sm)", padding: "0 20px", position: "sticky", top: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "space-between", height: 54 }}>
+      <header style={{ background: "rgba(9,21,8,0.97)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", borderBottom: "1px solid var(--border-0)", boxShadow: "0 1px 0 rgba(76,175,106,0.1)", padding: "0 20px", position: "sticky", top: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "space-between", height: 54 }}>
         {/* Sky blue accent line */}
         <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "linear-gradient(90deg, var(--mocha) 0%, var(--border-1) 60%, transparent 100%)", pointerEvents: "none" }} />
         <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
-          <div style={{ width: 29, height: 29, borderRadius: 7, background: "linear-gradient(135deg, var(--mocha-dark), var(--mocha))", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, boxShadow: "0 2px 8px rgba(96,165,250,0.25)" }}>🚖</div>
+          <div style={{ width: 29, height: 29, borderRadius: 7, background: "linear-gradient(135deg, var(--mocha-dark), var(--mocha))", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, boxShadow: "0 2px 8px rgba(76,175,106,0.2)" }}>🚖</div>
           <div>
-            <h1 style={{ fontSize: 15, fontWeight: 700, letterSpacing: "0.03em", color: "var(--text-1)", fontFamily: "var(--sans)", lineHeight: 1 }}>DISPATCH HQ</h1>
-            <p style={{ fontSize: 10, color: "var(--text-3)", letterSpacing: "0.1em", fontFamily: "var(--mono)", marginTop: 1 }}>{session ? (session.displayName || session.username).toUpperCase() : "DISPATCHER"}</p>
+            <h1 style={{ fontSize: 16, fontWeight: 700, letterSpacing: "0.1em", color: "var(--amber)", fontFamily: "var(--display)", fontFamily: "var(--sans)", background: "var(--bg-0)", lineHeight: 1 }}>DISPATCH HQ</h1>
+            <p style={{ fontSize: 9, color: "var(--text-3)", fontFamily: "var(--mono)", letterSpacing: "0.08em", letterSpacing: "0.1em", fontFamily: "var(--mono)", marginTop: 1 }}>{session ? (session.displayName || session.username).toUpperCase() : "DISPATCHER"}</p>
           </div>
         </div>
         <nav role="navigation" aria-label="Main tabs" style={{ display: "flex", gap: 0, alignItems: "center", overflowX: "auto", WebkitOverflowScrolling: "touch", msOverflowStyle: "none", scrollbarWidth: "none", height: 54 }}>
           {syncConfigured && (
-            <span style={{ fontSize: 10, marginRight: 14, color: syncStatus === "syncing" ? "var(--blue)" : passphrase ? "var(--green)" : "var(--text-3)", display: "flex", alignItems: "center", gap: 5, fontFamily: "var(--mono)", letterSpacing: "0.12em" }}>
-              <span style={{ width: 5, height: 5, borderRadius: "50%", background: syncStatus === "syncing" ? "var(--blue)" : passphrase ? "var(--green)" : "var(--text-3)", display: "inline-block", animation: "pulse-dot 1.5s infinite" }} />
+            <span style={{ fontSize: 10, marginRight: 14, color: syncStatus === "syncing" ? "var(--green)" : passphrase ? "var(--green)" : "var(--text-3)", display: "flex", alignItems: "center", gap: 5, fontFamily: "var(--mono)", letterSpacing: "0.12em" }}>
+              <span style={{ width: 5, height: 5, borderRadius: "50%", background: syncStatus === "syncing" ? "var(--green)" : passphrase ? "var(--green)" : "var(--text-3)", display: "inline-block", animation: "pulse-dot 1.5s infinite" }} />
               {syncStatus === "syncing" ? "SYNC" : passphrase ? "LIVE" : "OFF"}
             </span>
           )}
@@ -2647,9 +2647,9 @@ Rules:
               borderBottom: view === v ? "2px solid var(--blue)" : "2px solid transparent",
               borderTop: "2px solid transparent",
               background: "transparent",
-              color: view === v ? "var(--blue)" : "var(--text-2)",
-              fontSize: 13, fontWeight: view === v ? 600 : 400, cursor: "pointer",
-              fontFamily: "var(--sans)", letterSpacing: "0.01em",
+              color: view === v ? "var(--amber)" : "var(--text-3)",
+              fontSize: 11, fontWeight: view === v ? 600 : 400, cursor: "pointer",
+              fontFamily: "var(--mono)", letterSpacing: "0.1em",
               transition: "color 0.15s, border-color 0.15s", whiteSpace: "nowrap"
             }}>{label}</button>
           ))}
@@ -2664,10 +2664,10 @@ Rules:
           <div role="alert" style={{ padding: "14px 18px", borderRadius: 10, marginBottom: 20, background: "rgba(61,159,255,0.05)", border: "1px solid rgba(61,159,255,0.15)", display: "flex", alignItems: "flex-start", gap: 12 }}>
             <span style={{ fontSize: 14, marginTop: 1 }}>🔒</span>
             <div style={{ flex: 1 }}>
-              <p style={{ fontSize: 13, fontWeight: 600, color: "var(--blue)", marginBottom: 4, fontFamily: "var(--sans)" }}>Privacy Notice</p>
+              <p style={{ fontSize: 13, fontWeight: 600, color: "var(--green)", marginBottom: 4, fontFamily: "var(--sans)" }}>Privacy Notice</p>
               <p style={{ fontSize: 14, color: "var(--text-2)", lineHeight: 1.6 }}>This app stores customer booking data on your device. Cloud Backup encrypts all data before transmission. AI Smart Fill sends booking text to Anthropic's API — don't include sensitive data beyond what's needed. Bookings auto-purge after 2 years.</p>
             </div>
-            <button onClick={dismissGdpr} style={{ padding: "5px 14px", borderRadius: 6, border: "none", background: "rgba(61,159,255,0.15)", color: "var(--blue)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "var(--sans)", flexShrink: 0, whiteSpace: "nowrap" }}>Got it</button>
+            <button onClick={dismissGdpr} style={{ padding: "5px 14px", borderRadius: 6, border: "none", background: "rgba(61,159,255,0.15)", color: "var(--green)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "var(--sans)", flexShrink: 0, whiteSpace: "nowrap" }}>Got it</button>
           </div>
         )}
 
@@ -2676,14 +2676,14 @@ Rules:
           <div className="card-enter booking-form-mobile">
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
               <div>
-                <h2 style={{ fontSize: 26, fontWeight: 800, color: "#f0eef8", fontFamily: "var(--sans)", letterSpacing: "-0.01em" }}>{editingBooking ? "EDIT BOOKING" : priceCheckMode ? "PRICE CHECK" : "NEW BOOKING"}</h2>
+                <h2 style={{ fontSize: 26, fontWeight: 800, color: "var(--text-1)", fontFamily: "var(--sans)", background: "var(--bg-0)", letterSpacing: "-0.01em" }}>{editingBooking ? "EDIT BOOKING" : priceCheckMode ? "PRICE CHECK" : "NEW BOOKING"}</h2>
                 <p style={{ fontSize: 11, color: "var(--text-3)", fontFamily: "var(--mono)", letterSpacing: "0.12em", marginTop: 2 }}>{new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }).toUpperCase()}</p>
               </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 {/* Price Check toggle */}
                 {!editingBooking && (
                   <button onClick={() => { setPriceCheckMode(v => !v); setForm(p=>({...INIT_FORM, pickupAddress: p.pickupAddress, dropoffAddress: p.dropoffAddress, passengers: p.passengers, tripType: p.tripType})); setPaymentManuallyEdited(false); setAutoFareLabel(""); }}
-                    style={{ padding: "7px 14px", borderRadius: 8, border: `1.5px solid ${priceCheckMode ? "var(--blue)" : "var(--border-0)"}`, background: priceCheckMode ? "var(--blue-light)" : "var(--bg-1)", color: priceCheckMode ? "var(--blue)" : "var(--text-2)", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "var(--mono)", letterSpacing: "0.1em", transition: "all 0.2s" }}>
+                    style={{ padding: "7px 14px", borderRadius: 8, border: `1px solid ${priceCheckMode ? "var(--amber)" : "var(--border-0)"}`, background: priceCheckMode ? "rgba(240,165,0,0.06)" : "var(--bg-1)", color: priceCheckMode ? "var(--amber)" : "var(--text-2)", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "var(--mono)", letterSpacing: "0.1em", transition: "all 0.2s" }}>
                     {priceCheckMode ? "✕ CLOSE" : "💲 PRICE"}
                   </button>
                 )}
@@ -2695,7 +2695,7 @@ Rules:
                       const val = d.toISOString().split("T")[0];
                       return (
                         <button key={label} onClick={() => setForm(p=>({...p, date: val}))}
-                          style={{ padding: "6px 12px", borderRadius: 7, border: `1px solid ${form.date === val ? "var(--blue)" : "var(--border-1)"}`, background: form.date === val ? "rgba(96,165,250,0.1)" : "transparent", color: form.date === val ? "var(--blue)" : "var(--text-2)", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "var(--mono)", letterSpacing: "0.06em", whiteSpace: "nowrap" }}>
+                          style={{ padding: "6px 12px", borderRadius: 7, border: `1px solid ${form.date === val ? "var(--green)" : "var(--border-1)"}`, background: form.date === val ? "rgba(76,175,106,0.08)" : "transparent", color: form.date === val ? "var(--green)" : "var(--text-2)", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "var(--mono)", letterSpacing: "0.06em", whiteSpace: "nowrap" }}>
                           {label.toUpperCase()}
                         </button>
                       );
@@ -2711,16 +2711,16 @@ Rules:
               <div style={{ animation: "fadeUp 0.25s ease forwards" }}>
                 {/* Price result display */}
                 {autoFareLabel ? (
-                  <div style={{ background: "linear-gradient(135deg, rgba(96,165,250,0.08), rgba(245,166,35,0.04))", border: "2px solid var(--amber-border)", borderRadius: 16, padding: "24px 20px", marginBottom: 16, textAlign: "center", position: "relative", overflow: "hidden" }}>
+                  <div style={{ background: "linear-gradient(135deg, rgba(76,175,106,0.06), rgba(245,166,35,0.04))", border: "2px solid var(--amber-border)", borderRadius: 16, padding: "24px 20px", marginBottom: 16, textAlign: "center", position: "relative", overflow: "hidden" }}>
                     <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg, var(--amber), transparent)" }} />
                     <p style={{ fontSize: 11, fontWeight: 700, color: "var(--text-3)", letterSpacing: "0.2em", fontFamily: "var(--mono)", marginBottom: 8 }}>ESTIMATED FARE</p>
-                    <p style={{ fontSize: 64, fontWeight: 400, color: "var(--blue)", fontFamily: "var(--sans)", letterSpacing: "0.05em", lineHeight: 1, marginBottom: 6 }}>
+                    <p style={{ fontSize: 64, fontWeight: 400, color: "var(--green)", fontFamily: "var(--sans)", letterSpacing: "0.05em", lineHeight: 1, marginBottom: 6 }}>
                       ${form.paymentAmount || "—"}
                     </p>
                     <p style={{ fontSize: 12, color: "var(--text-2)", fontFamily: "var(--mono)", letterSpacing: "0.06em" }}>{autoFareLabel.replace("Auto: ","").replace("Auto:","")}</p>
                     {/* Book This button */}
                     <button onClick={() => setPriceCheckMode(false)}
-                      style={{ marginTop: 20, padding: "12px 32px", borderRadius: 10, border: "none", background: "linear-gradient(135deg, #c47a0a, var(--amber))", color: "#000", fontSize: 14, fontWeight: 800, cursor: "pointer", fontFamily: "var(--sans)", letterSpacing: "0.12em", boxShadow: "0 4px 20px rgba(96,165,250,0.3)" }}>
+                      style={{ marginTop: 20, padding: "12px 32px", borderRadius: 10, border: "none", background: "linear-gradient(135deg, #c47a0a, var(--amber))", color: "#000", fontSize: 14, fontWeight: 800, cursor: "pointer", fontFamily: "var(--sans)", letterSpacing: "0.12em", boxShadow: "0 4px 20px rgba(76,175,106,0.25)" }}>
                       + BOOK THIS TRIP
                     </button>
                   </div>
@@ -2732,8 +2732,8 @@ Rules:
                 )}
 
                 {/* Minimal fields — addresses + pax + trip type only */}
-                <div className="form-section" style={{ background: "var(--bg-1)", border: "1.5px solid var(--border-0)", borderRadius: 12, padding: 16, marginBottom: 10, boxShadow: "var(--shadow-sm)" }}>
-                  <p className="form-section-label" style={{ fontSize: 10, fontWeight: 600, color: "var(--mocha)", letterSpacing: "0.12em", fontFamily: "var(--mono)", marginBottom: 12 }}>ROUTE</p>
+                <div className="form-section" style={{ background: "var(--bg-1)", border: "1.5px solid var(--border-0)", borderRadius: 12, padding: 16, marginBottom: 10, boxShadow: "0 1px 0 rgba(76,175,106,0.1)" }}>
+                  <p className="form-section-label" style={{ fontSize: 10, fontWeight: 500, color: "var(--green)", letterSpacing: "0.18em", fontFamily: "var(--mono)", marginBottom: 12 }}>ROUTE</p>
                   <AddressField label="Pickup Address" value={form.pickupAddress}
                     onChange={v => { const norm = normalizeLocation(v); const doNorm = normalizeLocation(form.dropoffAddress); const airport = ["JFK","LGA","EWR"].includes(norm) || ["JFK","LGA","EWR"].includes(doNorm); setForm(p=>({...p,pickupAddress:v,...(!airport && {airline:"",flightNumber:""})})); }}
                     highlight={false} mapsReady={mapsReady} speechLang={speechLang} />
@@ -2745,27 +2745,27 @@ Rules:
                 </div>
 
                 {/* Pax + Trip type */}
-                <div className="form-section" style={{ background: "var(--bg-1)", border: "1.5px solid var(--border-0)", borderRadius: 12, padding: 16, marginBottom: 10, boxShadow: "var(--shadow-sm)" }}>
-                  <p className="form-section-label" style={{ fontSize: 10, fontWeight: 600, color: "var(--mocha)", letterSpacing: "0.12em", fontFamily: "var(--mono)", marginBottom: 12 }}>PASSENGERS &amp; TRIP</p>
+                <div className="form-section" style={{ background: "var(--bg-1)", border: "1.5px solid var(--border-0)", borderRadius: 12, padding: 16, marginBottom: 10, boxShadow: "0 1px 0 rgba(76,175,106,0.1)" }}>
+                  <p className="form-section-label" style={{ fontSize: 10, fontWeight: 500, color: "var(--green)", letterSpacing: "0.18em", fontFamily: "var(--mono)", marginBottom: 12 }}>PASSENGERS &amp; TRIP</p>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
                     <div>
                       <label style={labelStyle}>Passengers</label>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <button onClick={() => setForm(p=>({...p,passengers:String(Math.max(1,parseInt(p.passengers||1)-1))}))}
-                          style={{ width: 44, height: 44, borderRadius: 8, border: "1px solid var(--border-1)", background: "var(--bg-2)", color: "var(--text-2)", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "var(--shadow-sm)" }}>−</button>
-                        <span style={{ flex: 1, textAlign: "center", fontSize: 22, fontWeight: 700, color: "var(--text-1)", fontFamily: "var(--mono)" }}>{form.passengers}</span>
+                          style={{ width: 44, height: 44, borderRadius: 8, border: "1px solid var(--border-1)", background: "var(--bg-2)", color: "var(--text-2)", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "0 1px 0 rgba(76,175,106,0.1)" }}>−</button>
+                        <span style={{ flex: 1, textAlign: "center", fontSize: 20, fontWeight: 700, color: "var(--amber)", fontFamily: "var(--mono)", letterSpacing: "0.04em" }}>{form.passengers}</span>
                         <button onClick={() => setForm(p=>({...p,passengers:String(Math.min(12,parseInt(p.passengers||1)+1))}))}
-                          style={{ width: 44, height: 44, borderRadius: 8, border: "1px solid var(--border-1)", background: "var(--mocha-light)", color: "var(--mocha)", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "var(--shadow-sm)" }}>+</button>
+                          style={{ width: 44, height: 44, borderRadius: 8, border: "1px solid var(--border-1)", background: "var(--bg-2)", color: "var(--amber)", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "0 1px 0 rgba(76,175,106,0.1)" }}>+</button>
                       </div>
                     </div>
                     <div>
                       <label style={labelStyle}>Luggage</label>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <button onClick={() => setForm(p=>({...p,luggage:String(Math.max(0,parseInt(p.luggage||0)-1))}))}
-                          style={{ width: 44, height: 44, borderRadius: 8, border: "1px solid var(--border-1)", background: "var(--bg-2)", color: "var(--text-2)", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "var(--shadow-sm)" }}>−</button>
-                        <span style={{ flex: 1, textAlign: "center", fontSize: 22, fontWeight: 700, color: "var(--text-1)", fontFamily: "var(--mono)" }}>{form.luggage}</span>
+                          style={{ width: 44, height: 44, borderRadius: 8, border: "1px solid var(--border-1)", background: "var(--bg-2)", color: "var(--text-2)", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "0 1px 0 rgba(76,175,106,0.1)" }}>−</button>
+                        <span style={{ flex: 1, textAlign: "center", fontSize: 20, fontWeight: 700, color: "var(--amber)", fontFamily: "var(--mono)", letterSpacing: "0.04em" }}>{form.luggage}</span>
                         <button onClick={() => setForm(p=>({...p,luggage:String(Math.min(12,parseInt(p.luggage||0)+1))}))}
-                          style={{ width: 44, height: 44, borderRadius: 8, border: "1px solid var(--border-1)", background: "var(--mocha-light)", color: "var(--mocha)", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "var(--shadow-sm)" }}>+</button>
+                          style={{ width: 44, height: 44, borderRadius: 8, border: "1px solid var(--border-1)", background: "var(--bg-2)", color: "var(--amber)", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "0 1px 0 rgba(76,175,106,0.1)" }}>+</button>
                       </div>
                     </div>
                   </div>
@@ -2773,9 +2773,9 @@ Rules:
                     {[["one-way","One Way →"],["round-trip","Round Trip ⇄"]].map(([t, label]) => (
                       <button key={t} onClick={() => setForm(p=>({...p,tripType:t}))} style={{
                         padding: "14px 0", borderRadius: 10, border: form.tripType === t ? "2px solid var(--amber)" : "1px solid var(--border-1)",
-                        background: form.tripType === t ? "rgba(96,165,250,0.1)" : "var(--bg-2)",
-                        color: form.tripType === t ? "var(--blue)" : "var(--text-2)",
-                        fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "var(--sans)", transition: "all 0.15s"
+                        background: form.tripType === t ? "rgba(76,175,106,0.08)" : "var(--bg-2)",
+                        color: form.tripType === t ? "var(--amber)" : "var(--text-2)",
+                        fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "var(--mono)", letterSpacing: "0.06em", transition: "all 0.15s"
                       }}>{label}</button>
                     ))}
                   </div>
@@ -2785,8 +2785,8 @@ Rules:
 
             {/* ══ FULL BOOKING FORM (hidden in price check mode) ══ */}
             {!priceCheckMode && (<div>
-              <div className="form-section" style={{ background: "var(--bg-1)", border: "1.5px solid var(--border-0)", borderRadius: 12, padding: 16, marginBottom: 10, boxShadow: "var(--shadow-sm)" }}>
-              <p className="form-section-label" style={{ fontSize: 10, fontWeight: 600, color: "var(--mocha)", letterSpacing: "0.12em", fontFamily: "var(--mono)", marginBottom: 12 }}>DATE &amp; TIME</p>
+              <div className="form-section" style={{ background: "var(--bg-1)", border: "1.5px solid var(--border-0)", borderRadius: 12, padding: 16, marginBottom: 10, boxShadow: "0 1px 0 rgba(76,175,106,0.1)" }}>
+              <p className="form-section-label" style={{ fontSize: 10, fontWeight: 500, color: "var(--green)", letterSpacing: "0.18em", fontFamily: "var(--mono)", marginBottom: 12 }}>DATE &amp; TIME</p>
               <div className="resp-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
 
                 {/* ── Custom Calendar Picker ── */}
@@ -2796,10 +2796,10 @@ Rules:
                   <button data-picker onClick={() => setShowCal(v => !v)} style={{
                     ...inputStyle, width: "100%", textAlign: "left", cursor: "pointer",
                     border: missingFields.includes("date") ? "1.5px solid #ff3a30" : showCal ? `1.5px solid var(--amber)` : inputStyle.border,
-                    boxShadow: showCal ? "0 0 0 1px rgba(96,165,250,0.2)" : missingFields.includes("date") ? "0 0 0 1px rgba(220,38,38,0.15)" : "none",
+                    boxShadow: showCal ? "0 0 0 1px rgba(76,175,106,0.15)" : missingFields.includes("date") ? "0 0 0 1px rgba(220,38,38,0.15)" : "none",
                     display: "flex", alignItems: "center", justifyContent: "space-between", fontFamily: "inherit", background: inputStyle.background
                   }}>
-                    <span style={{ color: form.date ? "#f0eef8" : "var(--text-3)" }}>
+                    <span style={{ color: form.date ? "var(--text-1)" : "var(--text-3)" }}>
                       {form.date ? new Date(form.date + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }) : "Select date"}
                     </span>
                     <span style={{ fontSize: 12, color: "var(--text-3)" }}>{showCal ? "▲" : "▼"}</span>
@@ -2852,8 +2852,8 @@ Rules:
                             return (
                               <button key={i} onClick={() => { if (!isPast) { setForm(p => ({...p, date: dateStr})); setShowCal(false); } }} style={{
                                 padding: "7px 0", borderRadius: 6, border: "none", fontSize: 13, fontFamily: "inherit",
-                                background: isSelected ? "var(--blue)" : isToday ? "rgba(255,107,53,0.15)" : "transparent",
-                                color: isPast ? "var(--border-0)" : isSelected ? "#fff" : isToday ? "var(--blue)" : "#ccc",
+                                background: isSelected ? "var(--green)" : isToday ? "rgba(255,107,53,0.15)" : "transparent",
+                                color: isPast ? "var(--border-0)" : isSelected ? "#fff" : isToday ? "var(--green)" : "#ccc",
                                 cursor: isPast ? "not-allowed" : "pointer",
                                 fontWeight: isSelected || isToday ? 700 : 400,
                                 opacity: isPast ? 0.4 : 1
@@ -2871,7 +2871,7 @@ Rules:
                               <button key={label} onClick={() => { setForm(p => ({...p, date: ds})); setShowCal(false); }} style={{
                                 flex: 1, padding: "6px 0", borderRadius: 6, border: "1px solid var(--border-1)",
                                 background: form.date === ds ? "rgba(220,38,38,0.06)" : "transparent",
-                                color: form.date === ds ? "var(--blue)" : "var(--text-2)", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 600
+                                color: form.date === ds ? "var(--green)" : "var(--text-2)", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 600
                               }}>{label}</button>
                             );
                           })}
@@ -2892,7 +2892,7 @@ Rules:
                     boxShadow: showTimePicker ? "0 0 0 1px rgba(255,107,53,0.2)" : missingFields.includes("timeSlot") ? "0 0 0 1px rgba(220,38,38,0.15)" : "none",
                     display: "flex", alignItems: "center", justifyContent: "space-between", fontFamily: "inherit", background: inputStyle.background
                   }}>
-                    <span style={{ color: form.timeSlot ? "#e8e6e1" : "#7a8498" }}>{form.timeSlot || "Select time"}</span>
+                    <span style={{ color: form.timeSlot ? "var(--text-1)" : "#7a8498" }}>{form.timeSlot || "Select time"}</span>
                     <span style={{ fontSize: 12, color: "#8892a8" }}>{showTimePicker ? "▲" : "▼"}</span>
                   </button>
 
@@ -2927,7 +2927,7 @@ Rules:
                             }} style={{
                               width: "100%", padding: "9px 16px", border: "none", textAlign: "left",
                               background: isSelected ? "rgba(255,58,48,0.15)" : "transparent",
-                              color: isSelected ? "var(--blue)" : isAM ? "var(--blue-mid)" : "#ffa366",
+                              color: isSelected ? "var(--green)" : isAM ? "var(--green)" : "#ffa366",
                               fontSize: 14, cursor: "pointer", fontFamily: "inherit",
                               fontWeight: isSelected ? 700 : 400,
                               borderBottom: t.endsWith("AM") && QUICK_TIMES[QUICK_TIMES.indexOf(t)+1]?.includes("PM") ? "1px solid #222" : "none"
@@ -2944,7 +2944,7 @@ Rules:
 
             {/* Customer Info */}
             <div style={{ background: "var(--bg-1)", border: "1px solid #1e2028", borderRadius: 14, padding: 18, marginBottom: 14 }}>
-              <p style={{ fontSize: 14, fontWeight: 700, color: "var(--blue)", marginBottom: 14, letterSpacing: "0.1em" }}>CUSTOMER INFO</p>
+              <p style={{ fontSize: 14, fontWeight: 700, color: "var(--green)", marginBottom: 14, letterSpacing: "0.1em" }}>CUSTOMER INFO</p>
               <div className="resp-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 <Field label="Customer Name" value={form.customerName} onChange={v => setForm(p=>({...p,customerName:v}))} full highlight={missingFields.includes("customerName")} />
                 <Field label="Phone Number" value={form.phone} onChange={v => setForm(p=>({...p,phone:v}))} type="tel" highlight={missingFields.includes("phone")} />
@@ -2994,10 +2994,10 @@ Rules:
                   <label style={labelStyle}>Passengers</label>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <button className="pax-step-btn" onClick={() => setForm(p=>({...p,passengers:String(Math.max(1,parseInt(p.passengers||1)-1))}))}
-                      style={{ width: 44, height: 44, borderRadius: 8, border: "1px solid var(--border-1)", background: "var(--bg-2)", color: "var(--text-2)", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "var(--shadow-sm)" }}>−</button>
-                    <span style={{ flex: 1, textAlign: "center", fontSize: 22, fontWeight: 700, color: "var(--text-1)", fontFamily: "var(--mono)" }}>{form.passengers}</span>
+                      style={{ width: 44, height: 44, borderRadius: 8, border: "1px solid var(--border-1)", background: "var(--bg-2)", color: "var(--text-2)", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "0 1px 0 rgba(76,175,106,0.1)" }}>−</button>
+                    <span style={{ flex: 1, textAlign: "center", fontSize: 20, fontWeight: 700, color: "var(--amber)", fontFamily: "var(--mono)", letterSpacing: "0.04em" }}>{form.passengers}</span>
                     <button className="pax-step-btn" onClick={() => setForm(p=>({...p,passengers:String(Math.min(12,parseInt(p.passengers||1)+1))}))}
-                      style={{ width: 44, height: 44, borderRadius: 8, border: "1px solid var(--border-1)", background: "var(--mocha-light)", color: "var(--mocha)", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "var(--shadow-sm)" }}>+</button>
+                      style={{ width: 44, height: 44, borderRadius: 8, border: "1px solid var(--border-1)", background: "var(--bg-2)", color: "var(--amber)", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "0 1px 0 rgba(76,175,106,0.1)" }}>+</button>
                   </div>
                 </div>
                 {/* Luggage stepper */}
@@ -3005,10 +3005,10 @@ Rules:
                   <label style={labelStyle}>Luggage</label>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <button className="pax-step-btn" onClick={() => setForm(p=>({...p,luggage:String(Math.max(0,parseInt(p.luggage||0)-1))}))}
-                      style={{ width: 44, height: 44, borderRadius: 8, border: "1px solid var(--border-1)", background: "var(--bg-2)", color: "var(--text-2)", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "var(--shadow-sm)" }}>−</button>
-                    <span style={{ flex: 1, textAlign: "center", fontSize: 22, fontWeight: 700, color: "var(--text-1)", fontFamily: "var(--mono)" }}>{form.luggage}</span>
+                      style={{ width: 44, height: 44, borderRadius: 8, border: "1px solid var(--border-1)", background: "var(--bg-2)", color: "var(--text-2)", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "0 1px 0 rgba(76,175,106,0.1)" }}>−</button>
+                    <span style={{ flex: 1, textAlign: "center", fontSize: 20, fontWeight: 700, color: "var(--amber)", fontFamily: "var(--mono)", letterSpacing: "0.04em" }}>{form.luggage}</span>
                     <button className="pax-step-btn" onClick={() => setForm(p=>({...p,luggage:String(Math.min(12,parseInt(p.luggage||0)+1))}))}
-                      style={{ width: 44, height: 44, borderRadius: 8, border: "1px solid var(--border-1)", background: "var(--mocha-light)", color: "var(--mocha)", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "var(--shadow-sm)" }}>+</button>
+                      style={{ width: 44, height: 44, borderRadius: 8, border: "1px solid var(--border-1)", background: "var(--bg-2)", color: "var(--amber)", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "0 1px 0 rgba(76,175,106,0.1)" }}>+</button>
                   </div>
                 </div>
               </div>
@@ -3017,8 +3017,8 @@ Rules:
                 {[["one-way","One Way →"],["round-trip","Round Trip ⇄"]].map(([t, label]) => (
                   <button key={t} className="trip-type-btn" onClick={() => setForm(p=>({...p,tripType:t}))} style={{
                     padding: "14px 0", borderRadius: 10, border: form.tripType === t ? "2px solid var(--amber)" : "1px solid var(--border-1)",
-                    background: form.tripType === t ? "rgba(96,165,250,0.1)" : "var(--bg-2)",
-                    color: form.tripType === t ? "var(--blue)" : "var(--text-2)",
+                    background: form.tripType === t ? "rgba(76,175,106,0.08)" : "var(--bg-2)",
+                    color: form.tripType === t ? "var(--amber)" : "var(--text-2)",
                     fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "var(--sans)",
                     transition: "all 0.15s"
                   }}>{label}</button>
@@ -3034,7 +3034,7 @@ Rules:
                     </span>
                     {paymentManuallyEdited && (
                       <button onClick={() => { setPaymentManuallyEdited(false); }}
-                        style={{ fontSize: 10, fontFamily: "var(--mono)", color: "var(--blue)", background: "transparent", border: "none", cursor: "pointer", letterSpacing: "0.08em", padding: 0 }}>
+                        style={{ fontSize: 10, fontFamily: "var(--mono)", color: "var(--green)", background: "transparent", border: "none", cursor: "pointer", letterSpacing: "0.08em", padding: 0 }}>
                         RESET
                       </button>
                     )}
@@ -3046,11 +3046,11 @@ Rules:
             {/* ── Flight Status & AI-Powered Fare ── */}
             <div style={{ background: "linear-gradient(135deg, #0f1118, #131620)", border: "1px solid #1a1d28", borderRadius: 14, padding: 18, marginBottom: 14 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-                <p style={{ fontSize: 14, fontWeight: 700, color: "var(--blue)", letterSpacing: "0.1em" }}>✈ FLIGHT STATUS & FARE ASSIST</p>
+                <p style={{ fontSize: 14, fontWeight: 700, color: "var(--green)", letterSpacing: "0.1em" }}>✈ FLIGHT STATUS & FARE ASSIST</p>
                 {isStandaloneMode() && !aiLoading && !aiError && (
                 <div style={{ fontSize: 12, color: "var(--text-2)", background: "rgba(217,119,6,0.05)", padding: "6px 10px", borderRadius: 6, border: "1px solid #3a3a1a" }}>
                   <span>Website mode — AI flight lookup unavailable. </span>
-                  <a href={form.flightNumber ? `https://flightaware.com/live/flight/${form.flightNumber.trim()}` : "https://flightaware.com"} target="_blank" rel="noopener noreferrer" style={{ color: "var(--blue)", fontWeight: 700, textDecoration: "none" }}>Check on FlightAware ↗</a>
+                  <a href={form.flightNumber ? `https://flightaware.com/live/flight/${form.flightNumber.trim()}` : "https://flightaware.com"} target="_blank" rel="noopener noreferrer" style={{ color: "var(--green)", fontWeight: 700, textDecoration: "none" }}>Check on FlightAware ↗</a>
                 </div>
               )}
               {aiLoading && <span style={{ fontSize: 12, color: "var(--amber)", animation: "pulse 1s infinite" }}>⏳ Searching... ({aiTimer}s)</span>}
@@ -3090,7 +3090,7 @@ Rules:
               {/* AI Summary */}
               {aiSummary && (
                 <div style={{ padding: "8px 12px", background: "rgba(59,158,255,0.06)", border: "1px solid #1a2a4a", borderRadius: 8, marginBottom: 12 }}>
-                  <p style={{ fontSize: 14, color: "var(--blue-mid)" }}>{aiSummary}</p>
+                  <p style={{ fontSize: 14, color: "var(--green)" }}>{aiSummary}</p>
                 </div>
               )}
 
@@ -3133,7 +3133,7 @@ Rules:
 
                   <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 8, alignItems: "center", marginBottom: 8 }}>
                     <div style={{ textAlign: "center" }}>
-                      <p style={{ fontSize: 18, fontWeight: 700, color: "var(--blue)" }}>{flightData.origin_code || "---"}</p>
+                      <p style={{ fontSize: 18, fontWeight: 700, color: "var(--green)" }}>{flightData.origin_code || "---"}</p>
                       <p style={{ fontSize: 12, color: "var(--text-2)" }}>{flightData.origin_city || "Origin"}</p>
                       {flightData.scheduled_departure && <p style={{ fontSize: 14, color: "var(--text-2)", fontWeight: 500, marginTop: 2 }}>
                         {flightData.actual_departure ? <><s style={{color:"#7a8498"}}>{flightData.scheduled_departure}</s> <span style={{color:"var(--amber)"}}>{flightData.actual_departure}</span></> : flightData.scheduled_departure}
@@ -3141,7 +3141,7 @@ Rules:
                     </div>
                     <div style={{ fontSize: 16, color: "#909aaa" }}>→</div>
                     <div style={{ textAlign: "center" }}>
-                      <p style={{ fontSize: 18, fontWeight: 700, color: "var(--blue)" }}>{flightData.destination_code || "---"}</p>
+                      <p style={{ fontSize: 18, fontWeight: 700, color: "var(--green)" }}>{flightData.destination_code || "---"}</p>
                       <p style={{ fontSize: 12, color: "var(--text-2)" }}>{flightData.destination_city || "Destination"}</p>
                       {flightData.scheduled_arrival && <p style={{ fontSize: 14, color: "var(--text-2)", fontWeight: 500, marginTop: 2 }}>
                         {flightData.actual_arrival && flightData.actual_arrival !== flightData.scheduled_arrival ? <><s style={{color:"#7a8498"}}>{flightData.scheduled_arrival}</s> <span style={{color:"var(--amber)"}}>{flightData.actual_arrival}</span></> : flightData.scheduled_arrival}
@@ -3187,7 +3187,7 @@ Rules:
 
             {/* Fleet Assignment — driver picker */}
             <div style={{ background: "var(--bg-1)", border: "1px solid #1e2028", borderRadius: 14, padding: 18, marginBottom: 14 }}>
-              <p style={{ fontSize: 14, fontWeight: 700, color: "var(--blue)", marginBottom: 4, letterSpacing: "0.08em" }}>🚖 Fleet Assignment</p>
+              <p style={{ fontSize: 14, fontWeight: 700, color: "var(--green)", marginBottom: 4, letterSpacing: "0.08em" }}>🚖 Fleet Assignment</p>
 
               {/* Active filters display */}
               {(() => {
@@ -3246,13 +3246,13 @@ Rules:
                     : "On duty";
 
                   // Border/bg colour by state
-                  const borderColor = isSelected    ? "var(--blue)"
+                  const borderColor = isSelected    ? "var(--green)"
                     : isUnavailable                 ? "var(--bg-1)"
                     : "1e2028";
                   const bgColor     = isSelected    ? "rgba(220,38,38,0.08)"
                     : isUnavailable                 ? "var(--bg-0)"
                     : "var(--bg-1)";
-                  const textColor   = isSelected    ? "var(--blue)"
+                  const textColor   = isSelected    ? "var(--green)"
                     : isUnavailable                 ? "var(--text-1)"
                     : "#ccc";
                   const subColor    = isSelected    ? "#ff8c35"
@@ -3283,8 +3283,8 @@ Rules:
                       {/* Airport capability badges */}
                       {!isUnavailable && (
                         <div style={{ display: "flex", justifyContent: "center", gap: 3, marginTop: 4 }}>
-                          {driver.airportPickup  && <span style={{ fontSize: 9, padding: "1px 4px", borderRadius: 3, background: "rgba(96,165,250,0.1)", color: "var(--blue)", border: "1px solid #1a2a4a" }}>PU</span>}
-                          {driver.airportDropoff && <span style={{ fontSize: 9, padding: "1px 4px", borderRadius: 3, background: "rgba(96,165,250,0.1)", color: "var(--blue)", border: "1px solid #1a2a4a" }}>DO</span>}
+                          {driver.airportPickup  && <span style={{ fontSize: 9, padding: "1px 4px", borderRadius: 3, background: "rgba(76,175,106,0.08)", color: "var(--green)", border: "1px solid #1a2a4a" }}>PU</span>}
+                          {driver.airportDropoff && <span style={{ fontSize: 9, padding: "1px 4px", borderRadius: 3, background: "rgba(76,175,106,0.08)", color: "var(--green)", border: "1px solid #1a2a4a" }}>DO</span>}
                         </div>
                       )}
                     </button>
@@ -3296,7 +3296,7 @@ Rules:
               <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 12 }}>
                 <span style={{ fontSize: 11, color: "#7a8498" }}><span style={{ color: "#ccc" }}>■</span> Available</span>
                 <span style={{ fontSize: 11, color: "#7a8498" }}><span style={{ color: "var(--text-1)" }}>■</span> Off today / shift</span>
-                <span style={{ fontSize: 11, color: "#7a8498" }}><span style={{ color: "var(--blue)" }}>PU</span> Airport pickup &nbsp;<span style={{ color: "var(--blue)" }}>DO</span> Airport dropoff</span>
+                <span style={{ fontSize: 11, color: "#7a8498" }}><span style={{ color: "var(--green)" }}>PU</span> Airport pickup &nbsp;<span style={{ color: "var(--green)" }}>DO</span> Airport dropoff</span>
               </div>
 
               {/* Selected driver summary */}
@@ -3387,7 +3387,7 @@ Rules:
               );
             })()}
 
-            <button onClick={handleSubmit} disabled={isSubmitting} className="confirm-btn" aria-label={isSubmitting ? "Saving booking" : editingBooking ? "Update booking" : "Confirm booking"} style={{ width: "100%", padding: 16, borderRadius: 12, border: "none", background: isSubmitting ? "var(--bg-2)" : "linear-gradient(135deg, #c47a0a, var(--amber))", color: isSubmitting ? "var(--text-2)" : "#000", fontSize: 16, fontWeight: 800, cursor: isSubmitting ? "not-allowed" : "pointer", fontFamily: "var(--sans)", letterSpacing: "0.1em", boxShadow: isSubmitting ? "none" : "0 4px 24px rgba(96,165,250,0.3)", opacity: isSubmitting ? 0.6 : 1, transition: "all 0.2s" }}>
+            <button onClick={handleSubmit} disabled={isSubmitting} className="confirm-btn" aria-label={isSubmitting ? "Saving booking" : editingBooking ? "Update booking" : "Confirm booking"} style={{ width: "100%", padding: 16, borderRadius: 12, border: "none", background: isSubmitting ? "var(--bg-2)" : "var(--amber)", color: isSubmitting ? "var(--text-3)" : "#0a0a0a", fontSize: 14, fontWeight: 700, cursor: isSubmitting ? "not-allowed" : "pointer", fontFamily: "var(--mono)", letterSpacing: "0.14em", boxShadow: isSubmitting ? "none" : "0 4px 16px rgba(240,165,0,0.25)", opacity: isSubmitting ? 0.6 : 1, transition: "all 0.2s" }}>
               {isSubmitting ? "⏳ SAVING..." : editingBooking ? "UPDATE BOOKING ✓" : "CONFIRM BOOKING ✓"}
             </button>
           </div>)}
@@ -3521,11 +3521,11 @@ Rules:
                   <div className="confirm-row" style={{ animationDelay:"0.38s", display:"flex", gap:8, marginBottom:14 }}>
                     <div style={{ flex:1, background:"rgba(59,158,255,0.06)", border:"1px solid rgba(59,158,255,0.2)", borderRadius:8, padding:"8px 12px" }}>
                       <p style={{ fontSize:10, color:"#3b6aaa", margin:"0 0 2px", letterSpacing:"0.12em" }}>✈️ AIRLINE</p>
-                      <p style={{ fontSize:13, fontWeight:600, color:"var(--blue-mid)", margin:0 }}>{showConfirm.airline}</p>
+                      <p style={{ fontSize:13, fontWeight:600, color:"var(--green)", margin:0 }}>{showConfirm.airline}</p>
                     </div>
                     <div style={{ flex:1, background:"rgba(59,158,255,0.06)", border:"1px solid rgba(59,158,255,0.2)", borderRadius:8, padding:"8px 12px" }}>
                       <p style={{ fontSize:10, color:"#3b6aaa", margin:"0 0 2px", letterSpacing:"0.12em" }}>FLIGHT</p>
-                      <p style={{ fontSize:13, fontWeight:600, color:"var(--blue-mid)", margin:0, fontFamily:"monospace" }}>{showConfirm.flightNumber}</p>
+                      <p style={{ fontSize:13, fontWeight:600, color:"var(--green)", margin:0, fontFamily:"monospace" }}>{showConfirm.flightNumber}</p>
                     </div>
                     {showConfirm.flightStatus && (
                       <div style={{ flex:1, background:"rgba(5,150,105,0.05)", border:"1px solid rgba(80,200,80,0.2)", borderRadius:8, padding:"8px 12px" }}>
@@ -3658,11 +3658,11 @@ Rules:
                   <div className="resp-grid-3" style={{ display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:8 }}>
                     <div style={SC}><div style={{fontSize:18,marginBottom:4}}>📋</div><div style={{fontSize:20,fontWeight:800,color:"#fff"}}>{active.length}</div><div style={{fontSize:11,color:"#7a8498"}}>Total Trips</div><div style={{fontSize:12,color:"var(--text-2)",marginTop:4}}>Avg ${avgFare}</div></div>
                     <div style={SC}><div style={{fontSize:18,marginBottom:4}}>💰</div><div style={{fontSize:20,fontWeight:800,color:"var(--green)"}}>${weekTotal.toLocaleString()}</div><div style={{fontSize:11,color:"#7a8498"}}>This Week</div><div style={{fontSize:12,color:"var(--text-2)",marginTop:4}}>{weekFares.length} trips</div></div>
-                    <div style={SC}><div style={{fontSize:18,marginBottom:4}}>📅</div><div style={{fontSize:20,fontWeight:800,color:"var(--blue)"}}>${monthTotal.toLocaleString()}</div><div style={{fontSize:11,color:"#7a8498"}}>This Month</div><div style={{fontSize:12,color:"var(--text-2)",marginTop:4}}>{monthFares.length} trips</div></div>
+                    <div style={SC}><div style={{fontSize:18,marginBottom:4}}>📅</div><div style={{fontSize:20,fontWeight:800,color:"var(--green)"}}>${monthTotal.toLocaleString()}</div><div style={{fontSize:11,color:"#7a8498"}}>This Month</div><div style={{fontSize:12,color:"var(--text-2)",marginTop:4}}>{monthFares.length} trips</div></div>
                   </div>
                   <div className="resp-grid-3" style={{ display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:16 }}>
                     <div style={SC}><div style={{fontSize:18,marginBottom:4}}>✈️</div><div style={{fontSize:20,fontWeight:800,color:"var(--amber)"}}>{airportCount}</div><div style={{fontSize:11,color:"#7a8498"}}>Airport Trips</div><div style={{fontSize:12,color:"var(--text-2)",marginTop:4}}>{active.length?Math.round(airportCount/active.length*100):0}% of total</div></div>
-                    <div style={SC}><div style={{fontSize:18,marginBottom:4}}>🚗</div><div style={{fontSize:20,fontWeight:800,color:"var(--blue)"}}>{topDriver?`#${topDriver[0]}`:"—"}</div><div style={{fontSize:11,color:"#7a8498"}}>Top Driver</div><div style={{fontSize:12,color:"var(--text-2)",marginTop:4}}>{topDriver?`${topDriver[1]} trips`:"No trips"}</div></div>
+                    <div style={SC}><div style={{fontSize:18,marginBottom:4}}>🚗</div><div style={{fontSize:20,fontWeight:800,color:"var(--green)"}}>{topDriver?`#${topDriver[0]}`:"—"}</div><div style={{fontSize:11,color:"#7a8498"}}>Top Driver</div><div style={{fontSize:12,color:"var(--text-2)",marginTop:4}}>{topDriver?`${topDriver[1]} trips`:"No trips"}</div></div>
                     <div style={SC}><div style={{fontSize:18,marginBottom:4}}>💵</div><div style={{fontSize:20,fontWeight:800,color:"var(--red)"}}>${totalFare.toLocaleString()}</div><div style={{fontSize:11,color:"#7a8498"}}>All-Time Revenue</div><div style={{fontSize:12,color:"var(--text-2)",marginTop:4}}>{fares.length} paid trips</div></div>
                   </div>
                 </div>
@@ -3689,8 +3689,8 @@ Rules:
                     </div>
                     {sorted.map(([id, s]) => (
                       <div key={id} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", padding: "8px 14px", borderBottom: "1px solid #0a0b0f", alignItems: "center" }}>
-                        <span style={{ fontSize: 14, fontWeight: 700, color: "var(--blue)" }}>#{id}</span>
-                        <span style={{ fontSize: 14, color: "#e8e6e1" }}>{s.trips}</span>
+                        <span style={{ fontSize: 14, fontWeight: 700, color: "var(--green)" }}>#{id}</span>
+                        <span style={{ fontSize: 14, color: "var(--text-1)" }}>{s.trips}</span>
                         <span style={{ fontSize: 14, color: "var(--green)" }}>${s.revenue.toLocaleString()}</span>
                         <span style={{ fontSize: 13, color: "var(--amber)" }}>{s.airport} ✈</span>
                       </div>
@@ -3780,7 +3780,7 @@ Rules:
         {/* ══════════════ DRIVERS ══════════════ */}
         {view === "drivers" && (
           <div className="card-enter">
-            <h2 style={{ fontSize: 20, fontWeight: 700, color: "#f0eef8", marginBottom: 16 }}>Driver Database</h2>
+            <h2 style={{ fontSize: 20, fontWeight: 700, color: "var(--text-1)", marginBottom: 16 }}>Driver Database</h2>
 
             {/* Driver Management — Add Custom Drivers */}
             {(() => {
@@ -3802,11 +3802,11 @@ Rules:
                 <div style={{ marginBottom: 16 }}>
                   <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom: 12 }}>
                     <p style={{ fontSize:13, color:"var(--text-2)" }}>{DRIVERS.length + customDrivers.length} registered drivers</p>
-                    <button onClick={()=>setShowAddDriver(v=>!v)} style={{ padding:"7px 14px", borderRadius:8, border:"1px solid #ff3a30", background:showAddDriver?"rgba(96,165,250,0.1)":"transparent", color:"var(--blue)", fontSize:13, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>{showAddDriver?"✕ Cancel":"+ Add Driver"}</button>
+                    <button onClick={()=>setShowAddDriver(v=>!v)} style={{ padding:"7px 14px", borderRadius:8, border:"1px solid #ff3a30", background:showAddDriver?"rgba(76,175,106,0.08)":"transparent", color:"var(--green)", fontSize:13, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>{showAddDriver?"✕ Cancel":"+ Add Driver"}</button>
                   </div>
                   {showAddDriver && (
                     <div style={{ background:"var(--bg-1)", border:"1px solid var(--border-1)", borderRadius:12, padding:16, marginBottom:14 }}>
-                      <p style={{ fontSize:14, fontWeight:700, color:"var(--blue)", marginBottom:12 }}>New Driver</p>
+                      <p style={{ fontSize:14, fontWeight:700, color:"var(--green)", marginBottom:12 }}>New Driver</p>
                       {dFormErr && <p style={{ color:"var(--red)", fontSize:13, marginBottom:8 }}>{dFormErr}</p>}
                       <div className="resp-grid-2" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:10 }}>
                         <div><label style={labelStyle}>Driver #</label><input type="number" min="1" max="99" value={dForm.id} onChange={e=>setDForm(p=>({...p,id:e.target.value}))} style={inputStyle} placeholder="e.g. 25" /></div>
@@ -3839,7 +3839,7 @@ Rules:
                 return (
                   <div key={d.id} style={{ background: "var(--bg-1)", border: "1px solid #1e2028", borderRadius: 12, padding: 14 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-                      <span style={{ fontSize: 20, fontWeight: 800, color: "var(--blue)", fontFamily: "inherit" }}>#{d.id}</span>
+                      <span style={{ fontSize: 20, fontWeight: 800, color: "var(--green)", fontFamily: "inherit" }}>#{d.id}</span>
                       {d.name && <span style={{ fontSize: 14, fontWeight: 700, color: "#fff" }}>{d.name}</span>}
                       <Badge label={shift} ok={true} neutral />
                       {d.airportPickup && <Badge label="✈ PU" ok={true} />}
@@ -3889,7 +3889,7 @@ Rules:
             {/* Maps API Key */}
             <div style={{ background: "var(--bg-1)", border: "1px solid #1e2028", borderRadius: 14, padding: 18, marginBottom: 14 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                <p style={{ fontSize: 14, fontWeight: 700, color: "var(--blue)", letterSpacing: "0.1em" }}>📍 GOOGLE MAPS AUTOCOMPLETE</p>
+                <p style={{ fontSize: 14, fontWeight: 700, color: "var(--green)", letterSpacing: "0.1em" }}>📍 GOOGLE MAPS AUTOCOMPLETE</p>
                 {mapsReady && <span style={{ fontSize: 12, padding: "2px 8px", borderRadius: 10, background: "rgba(5,150,105,0.08)", color: "var(--green)", border: "1px solid #1a3a1a" }}>Active</span>}
               </div>
               <p style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 10, lineHeight: 1.5 }}>
@@ -3932,7 +3932,7 @@ Rules:
               {/* Auto-sync toggle */}
               <div style={{ background: "var(--bg-1)", border: "1px solid #1e2028", borderRadius: 10, padding: "12px 14px", marginBottom: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                 <div style={{ flex: 1 }}>
-                  <p style={{ fontSize: 14, fontWeight: 700, color: "#e8e6e1", margin: "0 0 2px" }}>⚡ Auto-Sync</p>
+                  <p style={{ fontSize: 14, fontWeight: 700, color: "var(--text-1)", margin: "0 0 2px" }}>⚡ Auto-Sync</p>
                   <p style={{ fontSize: 12, color: "#8892a8", margin: 0 }}>Automatically push bookings every {autoSyncInterval} minutes{!passphrase ? " (unlock first)" : ""}</p>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -3943,7 +3943,7 @@ Rules:
                 </div>
               </div>
 
-              <p style={{ fontSize: 14, fontWeight: 700, color: "var(--blue)", marginBottom: 14, letterSpacing: "0.1em" }}>1. GOOGLE SHEETS ENDPOINT</p>
+              <p style={{ fontSize: 14, fontWeight: 700, color: "var(--green)", marginBottom: 14, letterSpacing: "0.1em" }}>1. GOOGLE SHEETS ENDPOINT</p>
               <label style={labelStyle}>Web App URL</label>
               <p style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 6 }}>Paste the Google Apps Script URL from your setup. See the Setup Guide for step-by-step instructions.</p>
               <input
@@ -3962,7 +3962,7 @@ Rules:
 
             {/* Encryption Setup */}
             <div style={{ background: "var(--bg-1)", border: "1px solid #1e2028", borderRadius: 14, padding: 18, marginBottom: 14 }}>
-              <p style={{ fontSize: 14, fontWeight: 700, color: "var(--blue)", marginBottom: 14, letterSpacing: "0.1em" }}>2. ENCRYPTION PASSPHRASE</p>
+              <p style={{ fontSize: 14, fontWeight: 700, color: "var(--green)", marginBottom: 14, letterSpacing: "0.1em" }}>2. ENCRYPTION PASSPHRASE</p>
               <p style={{ fontSize: 13, color: "#a8b0c0", marginBottom: 10 }}>
                 This passphrase encrypts all customer data. If lost, your remote data cannot be recovered.
               </p>
@@ -3999,7 +3999,7 @@ Rules:
             {/* Sync Controls */}
             {syncConfigured && passphrase && (
               <div style={{ background: "var(--bg-1)", border: "1px solid #1e2028", borderRadius: 14, padding: 18, marginBottom: 14 }}>
-                <p style={{ fontSize: 14, fontWeight: 700, color: "var(--blue)", marginBottom: 14, letterSpacing: "0.1em" }}>3. SYNC CONTROLS</p>
+                <p style={{ fontSize: 14, fontWeight: 700, color: "var(--green)", marginBottom: 14, letterSpacing: "0.1em" }}>3. SYNC CONTROLS</p>
                 <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
                   <button onClick={syncNow} disabled={syncStatus === "syncing"} style={{
                     flex: 1, padding: "14px", borderRadius: 10, border: "none",
@@ -4083,9 +4083,9 @@ Rules:
 
             {/* Status Banner */}
             {backupMsg && (
-              <div style={{ padding: "10px 14px", borderRadius: 10, marginBottom: 16, background: backupMsgType === "success" ? "rgba(80,200,80,0.08)" : backupMsgType === "error" ? "rgba(220,38,38,0.06)" : "rgba(59,158,255,0.06)", border: `1px solid ${backupMsgType === "success" ? "rgba(5,150,105,0.2)" : backupMsgType === "error" ? "rgba(220,38,38,0.2)" : "rgba(96,165,250,0.2)"}`, display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ padding: "10px 14px", borderRadius: 10, marginBottom: 16, background: backupMsgType === "success" ? "rgba(80,200,80,0.08)" : backupMsgType === "error" ? "rgba(220,38,38,0.06)" : "rgba(59,158,255,0.06)", border: `1px solid ${backupMsgType === "success" ? "rgba(5,150,105,0.2)" : backupMsgType === "error" ? "rgba(220,38,38,0.2)" : "rgba(76,175,106,0.15)"}`, display: "flex", alignItems: "center", gap: 10 }}>
                 <span style={{ fontSize: 16 }}>{backupMsgType === "success" ? "✅" : backupMsgType === "error" ? "❌" : "💡"}</span>
-                <span style={{ fontSize: 14, color: backupMsgType === "success" ? "var(--green)" : backupMsgType === "error" ? "var(--red)" : "var(--blue-mid)", flex: 1 }}>{backupMsg}</span>
+                <span style={{ fontSize: 14, color: backupMsgType === "success" ? "var(--green)" : backupMsgType === "error" ? "var(--red)" : "var(--green)", flex: 1 }}>{backupMsg}</span>
                 <button onClick={() => setBackupMsg("")} style={{ background: "transparent", border: "none", color: "#a8b0c0", fontSize: 14, cursor: "pointer" }}>✕</button>
               </div>
             )}
@@ -4093,11 +4093,11 @@ Rules:
             {/* Storage Info Bar */}
             <div style={{ background: "var(--bg-1)", border: "1px solid #1e2028", borderRadius: 12, padding: 14, marginBottom: 14 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                <span style={{ fontSize: 14, fontWeight: 700, color: "var(--blue)", letterSpacing: "0.08em" }}>STORAGE</span>
+                <span style={{ fontSize: 14, fontWeight: 700, color: "var(--green)", letterSpacing: "0.08em" }}>STORAGE</span>
                 <span style={{ fontSize: 13, color: "var(--text-2)" }}>{storageInfo.capacityPercent}% of 5MB used</span>
               </div>
               <div style={{ height: 6, borderRadius: 3, background: "var(--border-0)", overflow: "hidden", marginBottom: 8 }}>
-                <div style={{ height: "100%", borderRadius: 3, width: `${Math.min(storageInfo.capacityPercent, 100)}%`, background: storageInfo.capacityPercent > 80 ? "var(--blue)" : storageInfo.capacityPercent > 50 ? "var(--amber)" : "#4ade80", transition: "width 0.3s" }} />
+                <div style={{ height: "100%", borderRadius: 3, width: `${Math.min(storageInfo.capacityPercent, 100)}%`, background: storageInfo.capacityPercent > 80 ? "var(--green)" : storageInfo.capacityPercent > 50 ? "var(--amber)" : "#4ade80", transition: "width 0.3s" }} />
               </div>
               <div style={{ display: "flex", gap: 16, fontSize: 13, color: "var(--text-2)" }}>
                 <span>📝 Bookings: <span style={{ color: "var(--text-2)" }}>{storageInfo.bookingKB}KB</span></span>
@@ -4122,7 +4122,7 @@ Rules:
 
             {/* Current Data Summary */}
             <div style={{ background: "var(--bg-1)", border: "1px solid #1e2028", borderRadius: 12, padding: 14, marginBottom: 14 }}>
-              <p style={{ fontSize: 14, fontWeight: 700, color: "var(--blue)", letterSpacing: "0.08em", marginBottom: 10 }}>CURRENT DATA</p>
+              <p style={{ fontSize: 14, fontWeight: 700, color: "var(--green)", letterSpacing: "0.08em", marginBottom: 10 }}>CURRENT DATA</p>
               <div className="resp-grid-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, textAlign: "center" }}>
                 <div style={{ background: "var(--bg-1)", borderRadius: 8, padding: "10px 8px" }}>
                   <p style={{ fontSize: 22, fontWeight: 800, color: "#fff" }}>{bookings.length}</p>
@@ -4133,7 +4133,7 @@ Rules:
                   <p style={{ fontSize: 12, color: "var(--text-2)" }}>Snapshots</p>
                 </div>
                 <div style={{ background: "var(--bg-1)", borderRadius: 8, padding: "10px 8px" }}>
-                  <p style={{ fontSize: 22, fontWeight: 800, color: "var(--blue)" }}>{backupLog.length}</p>
+                  <p style={{ fontSize: 22, fontWeight: 800, color: "var(--green)" }}>{backupLog.length}</p>
                   <p style={{ fontSize: 12, color: "var(--text-2)" }}>Log Entries</p>
                 </div>
               </div>
@@ -4141,23 +4141,23 @@ Rules:
 
             {/* Available Snapshots */}
             <div style={{ background: "var(--bg-1)", border: "1px solid #1e2028", borderRadius: 12, padding: 14, marginBottom: 14 }}>
-              <p style={{ fontSize: 14, fontWeight: 700, color: "var(--blue)", letterSpacing: "0.08em", marginBottom: 10 }}>SAVED SNAPSHOTS</p>
+              <p style={{ fontSize: 14, fontWeight: 700, color: "var(--green)", letterSpacing: "0.08em", marginBottom: 10 }}>SAVED SNAPSHOTS</p>
               {snapshots.length === 0 ? (
                 <p style={{ fontSize: 14, color: "var(--text-2)", fontWeight: 500, textAlign: "center", padding: 16 }}>No snapshots yet. Tap "Back Up Now" or wait for auto-backup.</p>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   {snapshots.map(snap => (
-                    <div key={snap.key} style={{ background: "var(--bg-1)", border: "1px solid #1e2028", borderRadius: 8, padding: "10px 12px", borderLeft: `3px solid ${snap.type === "manual" ? "#4ade80" : "var(--blue)"}` }}>
+                    <div key={snap.key} style={{ background: "var(--bg-1)", border: "1px solid #1e2028", borderRadius: 8, padding: "10px 12px", borderLeft: `3px solid ${snap.type === "manual" ? "#4ade80" : "var(--green)"}` }}>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <span style={{ fontSize: 13, fontWeight: 700, color: snap.type === "manual" ? "#4ade80" : "var(--blue)", textTransform: "uppercase", background: snap.type === "manual" ? "rgba(74,222,128,0.1)" : "rgba(96,165,250,0.1)", padding: "2px 6px", borderRadius: 4 }}>{snap.type === "manual" ? "💾 Manual" : "⏰ Auto"}</span>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: snap.type === "manual" ? "#4ade80" : "var(--green)", textTransform: "uppercase", background: snap.type === "manual" ? "rgba(74,222,128,0.1)" : "rgba(76,175,106,0.08)", padding: "2px 6px", borderRadius: 4 }}>{snap.type === "manual" ? "💾 Manual" : "⏰ Auto"}</span>
                           <span style={{ fontSize: 14, color: "var(--text-2)", fontWeight: 500 }}>{snap.count} bookings</span>
                           <span style={{ fontSize: 12, color: "var(--text-2)" }}>{snap.sizeKB}KB</span>
                         </div>
                         <div style={{ display: "flex", gap: 4 }}>
                           {restoreConfirmKey === snap.key ? (
                             <>
-                              <button onClick={() => handleRestore(snap.key)} style={{ padding: "3px 8px", borderRadius: 4, border: "none", background: "var(--blue)", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Restore</button>
+                              <button onClick={() => handleRestore(snap.key)} style={{ padding: "3px 8px", borderRadius: 4, border: "none", background: "var(--green)", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Restore</button>
                               <button onClick={() => setRestoreConfirmKey(null)} style={{ padding: "3px 8px", borderRadius: 4, border: "1px solid var(--border-1)", background: "transparent", color: "var(--text-2)", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
                             </>
                           ) : (
@@ -4178,7 +4178,7 @@ Rules:
             {/* Backup Log */}
             <div style={{ background: "var(--bg-1)", border: "1px solid #1e2028", borderRadius: 12, padding: 14 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                <p style={{ fontSize: 14, fontWeight: 700, color: "var(--blue)", letterSpacing: "0.08em" }}>BACKUP LOG</p>
+                <p style={{ fontSize: 14, fontWeight: 700, color: "var(--green)", letterSpacing: "0.08em" }}>BACKUP LOG</p>
                 <div style={{ display: "flex", gap: 4 }}>
                   <button onClick={() => setShowBackupLog(!showBackupLog)} style={{ padding: "3px 10px", borderRadius: 4, border: "1px solid var(--border-1)", background: "transparent", color: "var(--text-2)", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>{showBackupLog ? "Hide" : "Show"} ({backupLog.length})</button>
                   {backupLog.length > 0 && <button onClick={() => { BackupService.clearLog(); refreshBackupState(); }} style={{ padding: "3px 8px", borderRadius: 4, border: "1px solid #3a1a1a", background: "transparent", color: "#664", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Clear</button>}
@@ -4214,7 +4214,7 @@ Rules:
 // ── Subcomponents ──
 
 const labelStyle = { display: "block", fontSize: 12, fontWeight: 600, color: "var(--text-3)", letterSpacing: "0.14em", textTransform: "uppercase", marginBottom: 6, fontFamily: "var(--mono)" };
-const inputStyle = { width: "100%", padding: "12px 14px", borderRadius: 8, border: "1px solid #1c2035", background: "var(--bg-1)", color: "#f0eef8", fontSize: 16, fontFamily: "var(--sans)", outline: "none", transition: "border-color 0.15s, box-shadow 0.15s" };
+const inputStyle = { width: "100%", padding: "12px 14px", borderRadius: 8, border: "1px solid #1c2035", background: "var(--bg-1)", color: "var(--text-1)", fontSize: 16, fontFamily: "var(--sans)", outline: "none", transition: "border-color 0.15s, box-shadow 0.15s" };
 
 // ────────────────────────────────────────────────────────
 // LOGIN PAGE
@@ -4286,12 +4286,12 @@ function LoginPage({ endpointUrl: initialEndpointUrl, onLogin, onSaveEndpoint })
     } finally { setLoading(false); }
   }
 
-  const inp = { background: "var(--bg-1)", border: "1.5px solid var(--border-0)", borderRadius: 8, color: "var(--text-1)", fontSize: 15, padding: "11px 14px", width: "100%", outline: "none", fontFamily: "var(--sans)", boxSizing: "border-box", transition: "border-color 0.15s, box-shadow 0.15s", boxShadow: "var(--shadow-sm)" };
+  const inp = { background: "var(--bg-1)", border: "1.5px solid var(--border-0)", borderRadius: 8, color: "var(--text-1)", fontSize: 15, padding: "11px 14px", width: "100%", outline: "none", fontFamily: "var(--sans)", boxSizing: "border-box", transition: "border-color 0.15s, box-shadow 0.15s", boxShadow: "0 1px 0 rgba(76,175,106,0.1)" };
   const btn = { width: "100%", padding: "13px", borderRadius: 10, border: "none", fontSize: 17, fontWeight: 700, cursor: "pointer", fontFamily: "var(--sans)", transition: "all 0.2s", letterSpacing: "0.03em" };
-  const lbl = { display: "block", fontSize: 11, fontWeight: 600, color: "var(--text-2)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6, fontFamily: "var(--mono)" };
+  const lbl = { display: "block", fontSize: 10, fontWeight: 500, color: "var(--green)", letterSpacing: "0.16em", textTransform: "uppercase", marginBottom: 6, fontFamily: "var(--mono)", lineHeight: 1.2 };
 
   return (
-    <div style={{ minHeight: "100vh", background: "var(--bg-0)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, position: "relative", overflow: "hidden" }}>
+    <div style={{ minHeight: "100vh", background: "var(--bg-0)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, position: "relative", overflow: "hidden", minHeight: "100vh" }}>
       {/* Grid texture */}
       <div style={{ position: "absolute", inset: 0, backgroundImage: "linear-gradient(rgba(61,159,255,0.018) 1px, transparent 1px), linear-gradient(90deg, rgba(61,159,255,0.018) 1px, transparent 1px)", backgroundSize: "40px 40px", pointerEvents: "none" }} />
       {/* Glow orbs */}
@@ -4301,21 +4301,21 @@ function LoginPage({ endpointUrl: initialEndpointUrl, onLogin, onSaveEndpoint })
       <div style={{ width: "100%", maxWidth: 420, position: "relative", zIndex: 1, animation: "fadeUp 0.4s ease forwards" }}>
         {/* Logo */}
         <div style={{ textAlign: "center", marginBottom: 36 }}>
-          <div style={{ width: 64, height: 64, borderRadius: 18, background: "linear-gradient(135deg, #ff3a20, #ff5c2b)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 30, marginBottom: 16, boxShadow: "0 0 40px rgba(96,165,250,0.3)" }}>🚖</div>
-          <h1 style={{ color: "#f0eef8", fontSize: 28, fontWeight: 800, margin: 0, letterSpacing: "0.16em", fontFamily: "var(--sans)" }}>DISPATCH HQ</h1>
-          <p style={{ color: "var(--text-3)", fontSize: 12, marginTop: 6, letterSpacing: "0.04em", fontFamily: "var(--mono)" }}>택시 배차 관리 시스템</p>
+          <div style={{ width: 64, height: 64, borderRadius: 18, background: "linear-gradient(135deg, #ff3a20, #ff5c2b)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 30, marginBottom: 16, boxShadow: "0 0 40px rgba(76,175,106,0.25)" }}>🚖</div>
+          <h1 style={{ color: "var(--text-1)", fontSize: 28, fontWeight: 800, margin: 0, letterSpacing: "0.16em", fontFamily: "var(--sans)" }}>DISPATCH HQ</h1>
+          <p style={{ color: "var(--text-3)", fontSize: 11, marginTop: 6, letterSpacing: "0.08em", fontFamily: "var(--mono)", color: "var(--text-3)" }}>택시 배차 관리 시스템</p>
         </div>
 
         {/* Card */}
-        <div style={{ background: "var(--bg-1)", border: "1.5px solid var(--border-0)", borderRadius: 18, padding: 28, boxShadow: "var(--shadow-lg)" }}>
+        <div style={{ background: "var(--bg-1)", border: "1px solid var(--border-1)", borderRadius: 12, padding: 28, boxShadow: "var(--shadow-lg)" }}>
           {/* Tabs */}
-          <div style={{ display: "flex", background: "var(--bg-2)", borderRadius: 10, padding: 3, marginBottom: 24, border: "1.5px solid var(--border-0)" }}>
+          <div style={{ display: "flex", background: "var(--bg-1)", borderRadius: 8, padding: 3, marginBottom: 24, border: "1px solid var(--border-0)" }}>
             {[["signin","Sign In"],["signup","Sign Up"]].map(([t, label]) => (
               <button key={t} onClick={() => { setTab(t); setError(""); setSuccess(""); }} style={{
                 flex: 1, padding: "10px 0", borderRadius: 8, border: "none", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "var(--sans)", transition: "all 0.2s", letterSpacing: "0.01em",
-                background: tab === t ? "var(--mocha)" : "transparent",
-                color: tab === t ? "#fff" : "var(--text-2)",
-                boxShadow: tab === t ? "0 2px 8px rgba(139,94,60,0.25)" : "none"
+                background: tab === t ? "var(--amber)" : "transparent",
+                color: tab === t ? "#0a0a0a" : "var(--text-3)",
+                boxShadow: tab === t ? "0 2px 8px rgba(240,165,0,0.2)" : "none"
               }}>{label}</button>
             ))}
           </div>
@@ -4331,7 +4331,7 @@ function LoginPage({ endpointUrl: initialEndpointUrl, onLogin, onSaveEndpoint })
                 <div style={{ marginBottom: 16 }}>
                   <label style={lbl}>Google Sheets URL</label>
                   <input style={{...inp, fontSize: 12}} type="url" value={endpointUrl} onChange={e => setEndpointUrl(e.target.value)} placeholder="https://script.google.com/macros/s/.../exec" autoComplete="off" />
-                  <p style={{ fontSize: 13, color: "var(--text-3)", marginTop: 4, fontFamily: "var(--mono)" }}>Your Apps Script deployment URL. {endpointUrl && <span onClick={() => setShowUrlField(false)} style={{ color: "var(--blue)", cursor: "pointer" }}>Hide</span>}</p>
+                  <p style={{ fontSize: 13, color: "var(--text-3)", marginTop: 4, fontFamily: "var(--mono)" }}>Your Apps Script deployment URL. {endpointUrl && <span onClick={() => setShowUrlField(false)} style={{ color: "var(--green)", cursor: "pointer" }}>Hide</span>}</p>
                 </div>
               ) : (
                 <div style={{ marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0" }}>
@@ -4351,10 +4351,10 @@ function LoginPage({ endpointUrl: initialEndpointUrl, onLogin, onSaveEndpoint })
                 <input style={inp} type={showPass ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" autoComplete="current-password" />
                 <button type="button" onClick={() => setShowPass(v => !v)} style={{ position: "absolute", right: 12, top: 28, background: "transparent", border: "none", color: "var(--text-3)", cursor: "pointer", fontSize: 14 }}>{showPass ? "👁" : "👁️"}</button>
               </div>
-              <button type="submit" disabled={loading} style={{ ...btn, background: loading ? "var(--bg-2)" : "linear-gradient(135deg, #ff3a20, #ff5c2b)", color: loading ? "var(--text-3)" : "#fff", boxShadow: loading ? "none" : "0 4px 20px rgba(96,165,250,0.3)" }}>
+              <button type="submit" disabled={loading} style={{ ...btn, background: loading ? "var(--bg-2)" : "linear-gradient(135deg, #ff3a20, #ff5c2b)", color: loading ? "var(--text-3)" : "#fff", boxShadow: loading ? "none" : "0 4px 20px rgba(76,175,106,0.25)" }}>
                 {loading ? "Signing in…" : "Sign In →"}
               </button>
-              <p style={{ textAlign: "center", fontSize: 12, color: "var(--text-3)", marginTop: 16, marginBottom: 0, fontFamily: "var(--sans)" }}>No account? <button type="button" onClick={() => setTab("signup")} style={{ background: "none", border: "none", color: "var(--blue)", cursor: "pointer", fontFamily: "var(--sans)", fontSize: 12, fontWeight: 600, textDecoration: "underline" }}>Request Access</button></p>
+              <p style={{ textAlign: "center", fontSize: 12, color: "var(--text-3)", marginTop: 16, marginBottom: 0, fontFamily: "var(--sans)" }}>No account? <button type="button" onClick={() => setTab("signup")} style={{ background: "none", border: "none", color: "var(--green)", cursor: "pointer", fontFamily: "var(--sans)", fontSize: 12, fontWeight: 600, textDecoration: "underline" }}>Request Access</button></p>
             </form>
           ) : (
             <form onSubmit={handleSignUp}>
@@ -4365,7 +4365,7 @@ function LoginPage({ endpointUrl: initialEndpointUrl, onLogin, onSaveEndpoint })
               <div style={{ marginBottom: 14 }}>
                 <label style={lbl}>Username</label>
                 <input style={inp} type="text" value={username} onChange={e => setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g,""))} placeholder="letters_numbers_only" autoComplete="username" autoCapitalize="none" />
-                <p style={{ fontSize: 10, color: "var(--text-3)", marginTop: 4, fontFamily: "var(--mono)" }}>3–30 chars · letters, numbers, underscore only</p>
+                <p style={{ fontSize: 9, color: "var(--text-3)", fontFamily: "var(--mono)", letterSpacing: "0.08em", marginTop: 4, fontFamily: "var(--mono)" }}>3–30 chars · letters, numbers, underscore only</p>
               </div>
               <div style={{ marginBottom: 14 }}>
                 <label style={lbl}>Email (optional)</label>
@@ -4441,17 +4441,17 @@ function AdminDashboard({ currentUser, endpointUrl, onSignOut }) {
   const cardStyle = { background: "var(--bg-1)", border: "1px solid #1e2028", borderRadius: 12, padding: "14px 18px" };
 
   return (
-    <div style={{ minHeight: "100vh", background: "var(--bg-0)", color: "#e8e6e1", fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif" }}>
+    <div style={{ minHeight: "100vh", background: "var(--bg-0)", color: "var(--text-1)", fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif" }}>
       {/* Header */}
       <div style={{ background: "linear-gradient(90deg, #12141a, #0f1016)", borderBottom: "1px solid #1e2028", padding: "14px 24px", display: "flex", alignItems: "center", gap: 12 }}>
         <span style={{ fontSize: 24 }}>🚖</span>
         <div style={{ flex: 1 }}>
           <p style={{ fontSize: 16, fontWeight: 800, color: "#fff", margin: 0, letterSpacing: "0.04em" }}>DISPATCH HQ</p>
-          <p style={{ fontSize: 12, color: "var(--blue)", margin: 0, fontWeight: 600 }}>Admin Dashboard</p>
+          <p style={{ fontSize: 12, color: "var(--green)", margin: 0, fontWeight: 600 }}>Admin Dashboard</p>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span style={{ fontSize: 13, color: "var(--text-2)" }}>👤 {currentUser.displayName}</span>
-          <button onClick={onSignOut} style={{ padding: "7px 14px", borderRadius: 7, border: "1.5px solid var(--border-1)", background: "transparent", color: "var(--text-2)", fontSize: 13, fontWeight: 500, cursor: "pointer", fontFamily: "var(--sans)" }}>Sign Out</button>
+          <button onClick={onSignOut} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid var(--border-0)", background: "transparent", color: "var(--text-2)", fontSize: 13, fontWeight: 500, cursor: "pointer", fontFamily: "var(--sans)" }}>Sign Out</button>
         </div>
       </div>
 
@@ -4462,7 +4462,7 @@ function AdminDashboard({ currentUser, endpointUrl, onSignOut }) {
             ["👥", "Total Users", users.length, "#fff"],
             ["⏳", "Pending Approval", pendingCount, pendingCount > 0 ? "var(--amber)" : "#fff"],
             ["✅", "Active Users", users.filter(u => u.status==="active").length, "var(--green)"],
-            ["📋", "Total Bookings", stats.totalBookings, "var(--blue)"],
+            ["📋", "Total Bookings", stats.totalBookings, "var(--green)"],
           ].map(([icon, label, val, col]) => (
             <div key={label} style={cardStyle}>
               <p style={{ fontSize: 20, margin: "0 0 4px" }}>{icon}</p>
@@ -4489,7 +4489,7 @@ function AdminDashboard({ currentUser, endpointUrl, onSignOut }) {
                     value={confirmAction.newPassword || ""}
                     onChange={e => setConfirmAction(prev => ({ ...prev, newPassword: e.target.value }))}
                     placeholder="Enter new password for dispatcher"
-                    style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid var(--border-1)", background: "var(--bg-1)", color: "#e8e6e1", fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }}
+                    style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid var(--border-1)", background: "var(--bg-1)", color: "var(--text-1)", fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }}
                   />
                   <p style={{ fontSize: 11, color: "#7a8498", marginTop: 4 }}>Share this with the dispatcher verbally or over the phone.</p>
                 </div>
@@ -4505,7 +4505,7 @@ function AdminDashboard({ currentUser, endpointUrl, onSignOut }) {
                     }
                     doAction(confirmAction.action, confirmAction.username, confirmAction.newPassword);
                   }}
-                  style={{ flex: 1, padding: "10px", borderRadius: 8, border: "none", background: confirmAction.isReset ? "rgba(96,165,250,0.15)" : "var(--blue)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                  style={{ flex: 1, padding: "10px", borderRadius: 8, border: "none", background: confirmAction.isReset ? "rgba(76,175,106,0.12)" : "var(--green)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
                   {confirmAction.isReset ? "🔑 Reset" : "Confirm"}
                 </button>
               </div>
@@ -4518,7 +4518,7 @@ function AdminDashboard({ currentUser, endpointUrl, onSignOut }) {
           <div style={{ padding: "14px 18px", borderBottom: "1px solid #1e2028", display: "flex", alignItems: "center", gap: 10 }}>
             <span style={{ fontSize: 20 }}>📋</span>
             <div style={{ flex: 1 }}>
-              <p style={{ fontSize: 14, fontWeight: 700, color: "var(--blue)", margin: "0 0 2px", letterSpacing: "0.08em" }}>BOOKING DATA</p>
+              <p style={{ fontSize: 14, fontWeight: 700, color: "var(--green)", margin: "0 0 2px", letterSpacing: "0.08em" }}>BOOKING DATA</p>
               <p style={{ fontSize: 12, color: "#7a8498", margin: 0 }}>{stats.totalBookings} records in cloud (AES-256 encrypted)</p>
             </div>
           </div>
@@ -4540,10 +4540,10 @@ function AdminDashboard({ currentUser, endpointUrl, onSignOut }) {
         {/* Users table */}
         <div style={{ ...cardStyle, padding: 0, overflow: "hidden" }}>
           <div style={{ padding: "14px 18px", borderBottom: "1px solid #1e2028", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <p style={{ fontSize: 14, fontWeight: 700, color: "var(--blue)", margin: 0, letterSpacing: "0.08em", flex: 1 }}>DISPATCHER ACCOUNTS</p>
+            <p style={{ fontSize: 14, fontWeight: 700, color: "var(--green)", margin: 0, letterSpacing: "0.08em", flex: 1 }}>DISPATCHER ACCOUNTS</p>
             <div style={{ display: "flex", gap: 4 }}>
               {["all","pending","active","disabled"].map(s => (
-                <button key={s} onClick={() => setFilterStatus(s)} style={{ padding: "5px 10px", borderRadius: 6, border: filterStatus === s ? "1px solid #ff3a30" : "1px solid #1e2028", background: filterStatus === s ? "rgba(220,38,38,0.06)" : "transparent", color: filterStatus === s ? "var(--blue)" : "#7a8498", fontSize: 12, cursor: "pointer", fontFamily: "inherit", fontWeight: 600, textTransform: "capitalize" }}>{s}{s==="pending" && pendingCount > 0 ? ` (${pendingCount})` : ""}</button>
+                <button key={s} onClick={() => setFilterStatus(s)} style={{ padding: "5px 10px", borderRadius: 6, border: filterStatus === s ? "1px solid #ff3a30" : "1px solid #1e2028", background: filterStatus === s ? "rgba(220,38,38,0.06)" : "transparent", color: filterStatus === s ? "var(--green)" : "#7a8498", fontSize: 12, cursor: "pointer", fontFamily: "inherit", fontWeight: 600, textTransform: "capitalize" }}>{s}{s==="pending" && pendingCount > 0 ? ` (${pendingCount})` : ""}</button>
               ))}
             </div>
             <button onClick={fetchUsers} style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid #1e2028", background: "transparent", color: "#8892a8", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>↻ Refresh</button>
@@ -4557,7 +4557,7 @@ function AdminDashboard({ currentUser, endpointUrl, onSignOut }) {
             filtered.map(user => (
               <div key={user.id} style={{ padding: "14px 18px", borderBottom: "1px solid #12141a", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                 <div style={{ flex: 1, minWidth: 180 }}>
-                  <p style={{ fontSize: 14, fontWeight: 700, color: "#e8e6e1", margin: "0 0 2px" }}>{user.displayName}</p>
+                  <p style={{ fontSize: 14, fontWeight: 700, color: "var(--text-1)", margin: "0 0 2px" }}>{user.displayName}</p>
                   <p style={{ fontSize: 12, color: "#8892a8", margin: 0 }}>@{user.username}{user.email ? " · " + user.email : ""}</p>
                   <p style={{ fontSize: 11, color: "var(--text-3)", margin: "2px 0 0" }}>Registered {new Date(user.createdAt).toLocaleDateString()}</p>
                 </div>
@@ -4568,7 +4568,7 @@ function AdminDashboard({ currentUser, endpointUrl, onSignOut }) {
                     <button onClick={() => setConfirmAction({ action: "rejectUser", username: user.username, label: "Reject account for" })} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #3a1a1a", background: "rgba(220,38,38,0.04)", color: "var(--red)", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>✗ Reject</button>
                   </>}
                   {user.status === "active" && <button onClick={() => setConfirmAction({ action: "disableUser", username: user.username, label: "Disable account for" })} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid var(--border-1)", background: "transparent", color: "var(--text-2)", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Disable</button>}
-                  {user.status === "active" && <button onClick={() => setConfirmAction({ action: "resetPassword", username: user.username, label: "Reset password for", isReset: true })} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #2a3a4a", background: "rgba(59,158,255,0.06)", color: "var(--blue)", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>🔑 Reset PW</button>}
+                  {user.status === "active" && <button onClick={() => setConfirmAction({ action: "resetPassword", username: user.username, label: "Reset password for", isReset: true })} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #2a3a4a", background: "rgba(59,158,255,0.06)", color: "var(--green)", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>🔑 Reset PW</button>}
                   {user.status === "disabled" && <button onClick={() => setConfirmAction({ action: "enableUser", username: user.username, label: "Re-enable account for" })} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #1a3a1a", background: "transparent", color: "var(--green)", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Enable</button>}
                   {user.status !== "active" && <button onClick={() => setConfirmAction({ action: "deleteUser", username: user.username, label: "Permanently delete account for" })} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #3a1a1a", background: "transparent", color: "var(--red)", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Delete</button>}
                 </div>
@@ -4636,12 +4636,12 @@ function AdminDashboard({ currentUser, endpointUrl, onSignOut }) {
             } catch { setAdminSyncMsg("❌ Failed to save Maps key"); }
           };
 
-          const iStyle = { width:"100%", padding:"10px 12px", borderRadius:8, border:"1px solid #1e2028", background:"var(--bg-1)", color:"#e8e6e1", fontSize:14, fontFamily:"inherit", outline:"revert", boxSizing:"border-box" };
+          const iStyle = { width:"100%", padding:"10px 12px", borderRadius:8, border:"1px solid #1e2028", background:"var(--bg-1)", color:"var(--text-1)", fontSize:14, fontFamily:"inherit", outline:"revert", boxSizing:"border-box" };
           const lStyle = { display:"block", fontSize:12, fontWeight:700, color:"var(--text-2)", marginBottom:6, textTransform:"uppercase", letterSpacing:"0.06em" };
 
           return (
             <div style={{ marginTop: 20 }}>
-              <p style={{ fontSize: 14, fontWeight: 700, color: "var(--blue)", letterSpacing: "0.1em", marginBottom: 14 }}>⚙️ SETTINGS</p>
+              <p style={{ fontSize: 14, fontWeight: 700, color: "var(--green)", letterSpacing: "0.1em", marginBottom: 14 }}>⚙️ SETTINGS</p>
 
               {/* Google Sheets Sync */}
               <div style={{ background: "var(--bg-1)", border: "1px solid #1e2028", borderRadius: 12, padding: 18, marginBottom: 12 }}>
@@ -4870,7 +4870,7 @@ function DevicePassphraseGate({ onUnlocked, isFirstTime }) {
     }
   };
 
-  const inp = { background: "var(--bg-1)", border: "1px solid #1e2028", borderRadius: 8, color: "#e8e6e1", fontSize: 15, padding: "12px 14px", width: "100%", outline: "none", fontFamily: "inherit", boxSizing: "border-box" };
+  const inp = { background: "var(--bg-1)", border: "1px solid #1e2028", borderRadius: 8, color: "var(--text-1)", fontSize: 15, padding: "12px 14px", width: "100%", outline: "none", fontFamily: "inherit", boxSizing: "border-box" };
 
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg-0)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
@@ -4906,7 +4906,7 @@ function DevicePassphraseGate({ onUnlocked, isFirstTime }) {
             </div>
 
             {isFirstTime && (
-              <div style={{ padding: "10px 14px", background: "rgba(59,158,255,0.06)", border: "1px solid #1a2a4a", borderRadius: 8, marginBottom: 16, fontSize: 12, color: "var(--blue-mid)", lineHeight: 1.6 }}>
+              <div style={{ padding: "10px 14px", background: "rgba(59,158,255,0.06)", border: "1px solid #1a2a4a", borderRadius: 8, marginBottom: 16, fontSize: 12, color: "var(--green)", lineHeight: 1.6 }}>
                 💡 <strong>Write this passphrase down.</strong> It encrypts all customer data on your device. If forgotten, existing bookings cannot be recovered.
               </div>
             )}
@@ -5063,8 +5063,8 @@ function AddressField({ label, value, onChange, highlight, mapsReady, speechLang
   }, [recState, onChange, speechLang]);
 
   // Colour coding for mic button states
-  const micBg      = recState === "recording" ? "var(--blue)" : recState === "processing" ? "rgba(96,165,250,0.15)" : recState === "done" ? "rgba(5,150,105,0.1)" : "var(--bg-1)";
-  const micBorder  = recState === "recording" ? "var(--blue)" : recState === "processing" ? "rgba(96,165,250,0.15)" : recState === "done" ? "rgba(5,150,105,0.12)" : "var(--border-0)";
+  const micBg      = recState === "recording" ? "var(--green)" : recState === "processing" ? "rgba(76,175,106,0.12)" : recState === "done" ? "rgba(5,150,105,0.1)" : "var(--bg-1)";
+  const micBorder  = recState === "recording" ? "var(--green)" : recState === "processing" ? "rgba(76,175,106,0.12)" : recState === "done" ? "rgba(5,150,105,0.12)" : "var(--border-0)";
   const micIcon    = recState === "recording" ? "⏹" : recState === "processing" ? "⏳" : recState === "done" ? "✓" : "🎤";
   const micPulse   = recState === "recording" ? "pulse 1s infinite" : "none";
   const micTitle   = recState === "recording" ? "Recording — tap to stop" : recState === "processing" ? "Processing audio…" : recState === "done" ? "Done!" : "Tap to speak address (HIPAA-compliant, on-device)";
@@ -5117,7 +5117,7 @@ function AddressField({ label, value, onChange, highlight, mapsReady, speechLang
             : recState === "done" ? "1.5px solid #1a6a3a"
             : highlight ? "1.5px solid #ff3a30" : inputStyle.border,
           boxShadow: recState === "recording" ? "0 0 0 2px rgba(255,58,48,0.15)"
-            : recState === "processing" ? "0 0 0 2px rgba(96,165,250,0.1)"
+            : recState === "processing" ? "0 0 0 2px rgba(76,175,106,0.08)"
             : highlight ? "0 0 0 1px rgba(220,38,38,0.15)" : "none",
           transition: "all 0.2s"
         }}
@@ -5133,7 +5133,7 @@ function AddressField({ label, value, onChange, highlight, mapsReady, speechLang
           )}
           <p style={{
             fontSize: 11, margin: 0,
-            color: recState === "error" ? "var(--red)" : recState === "done" ? "var(--green)" : recState === "recording" ? "var(--blue)" : "var(--text-2)"
+            color: recState === "error" ? "var(--red)" : recState === "done" ? "var(--green)" : recState === "recording" ? "var(--green)" : "var(--text-2)"
           }}>{whisperMsg}</p>
         </div>
       )}
@@ -5154,7 +5154,7 @@ function AddressField({ label, value, onChange, highlight, mapsReady, speechLang
                   background: i === activeIdx ? "rgba(255,107,53,0.1)" : "transparent", display: "flex", alignItems: "flex-start", gap: 10 }}>
                 <span style={{ fontSize: 16, marginTop: 1, flexShrink: 0 }}>📍</span>
                 <div style={{ overflow: "hidden" }}>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: i === activeIdx ? "var(--blue)" : "#e8e6e1", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{main}</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: i === activeIdx ? "var(--green)" : "var(--text-1)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{main}</div>
                   {secondary && <div style={{ fontSize: 12, color: "#909aaa", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{secondary}</div>}
                 </div>
               </div>
@@ -5193,9 +5193,9 @@ function BookingSection({ title, bookings, onEdit, onDelete }) {
   return (
     <div style={{ marginBottom: 28 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
-        <h3 style={{ fontSize: 11, fontWeight: 600, color: "var(--blue)", letterSpacing: "0.1em", fontFamily: "var(--mono)", whiteSpace: "nowrap" }}>{title.replace(/[^\w\s]/g,"").trim().toUpperCase()}</h3>
+        <h3 style={{ fontSize: 10, fontWeight: 500, color: "var(--green)", letterSpacing: "0.18em", fontFamily: "var(--mono)", whiteSpace: "nowrap", lineHeight: 1 }}>{title.replace(/[^\w\s]/g,"").trim().toUpperCase()}</h3>
         <div style={{ flex: 1, height: 1, background: "linear-gradient(90deg, var(--border-0) 0%, transparent 100%)" }} />
-        <span style={{ fontSize: 10, color: "var(--text-3)", fontFamily: "var(--mono)", letterSpacing: "0.1em" }}>{bookings.length}</span>
+        <span style={{ fontSize: 9, color: "var(--text-3)", fontFamily: "var(--mono)", letterSpacing: "0.08em", fontFamily: "var(--mono)", letterSpacing: "0.1em" }}>{bookings.length}</span>
       </div>
       {Object.entries(groups).map(([key, cluster]) => (
         <div key={key} style={{ marginBottom: 6 }}>
@@ -5214,20 +5214,20 @@ function BookingSection({ title, bookings, onEdit, onDelete }) {
 
 function BookingCard({ booking: b, onEdit, onDelete, isCluster }) {
   const dayName = DAYS[new Date(b.date + "T12:00:00").getDay()];
-  const flightColor = b.flightStatus === "on-time" || b.flightStatus === "landed" ? "var(--green)" : b.flightStatus === "delayed" ? "#f59e0b" : b.flightStatus === "cancelled" ? "#ef4444" : "var(--blue)";
+  const flightColor = b.flightStatus === "on-time" || b.flightStatus === "landed" ? "var(--green)" : b.flightStatus === "delayed" ? "#f59e0b" : b.flightStatus === "cancelled" ? "#ef4444" : "var(--green)";
   return (
     <div style={{
       background: "var(--bg-1)", border: `1px solid ${isCluster ? "rgba(245,158,11,0.2)" : "var(--border-1)"}`,
       borderRadius: 10, padding: "12px 14px", marginBottom: 5,
-      borderLeft: `2px solid ${isCluster ? "#f59e0b" : "var(--blue)"}`,
+      borderLeft: `2px solid ${isCluster ? "#f59e0b" : "var(--green)"}`,
       transition: "border-color 0.15s"
     }}>
       {/* Top row: date/time/driver + actions */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 15, fontWeight: 700, color: "#f0eef8", fontFamily: "var(--mono)" }}>{b.date}</span>
+          <span style={{ fontSize: 15, fontWeight: 700, color: "var(--text-1)", fontFamily: "var(--mono)" }}>{b.date}</span>
           <span style={{ fontSize: 13, color: "var(--text-3)", fontFamily: "var(--mono)" }}>{dayName.toUpperCase()}</span>
-          <span style={{ fontSize: 14, fontWeight: 700, color: "var(--blue)", background: "rgba(96,165,250,0.1)", padding: "2px 8px", borderRadius: 5, fontFamily: "var(--mono)", border: "1px solid rgba(96,165,250,0.2)" }}>{b.timeSlot}</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: "var(--green)", background: "rgba(76,175,106,0.08)", padding: "2px 8px", borderRadius: 5, fontFamily: "var(--mono)", border: "1px solid rgba(76,175,106,0.15)" }}>{b.timeSlot}</span>
           {b.flightStatus && (
             <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, textTransform: "uppercase", letterSpacing: "0.08em", fontFamily: "var(--mono)", color: flightColor, background: `${flightColor}12`, border: `1px solid ${flightColor}30` }}>✈ {b.flightStatus}</span>
           )}
@@ -5259,17 +5259,17 @@ function BookingCard({ booking: b, onEdit, onDelete, isCluster }) {
       </div>
       {/* Info grid */}
       <div style={{ display: "grid", gridTemplateColumns: "auto 1fr 1fr", gap: "5px 14px", alignItems: "center" }}>
-        <span style={{ background: "rgba(96,165,250,0.1)", border: "1px solid rgba(96,165,250,0.2)", borderRadius: 5, padding: "2px 9px", fontSize: 14, fontWeight: 700, color: "var(--blue)", fontFamily: "var(--mono)", whiteSpace: "nowrap" }}>#{b.driverNumber || "–"}</span>
-        <span style={{ fontSize: 15, color: "#f0eef8", fontWeight: 500 }}>{b.customerName}</span>
+        <span style={{ background: "rgba(76,175,106,0.08)", border: "1px solid rgba(76,175,106,0.15)", borderRadius: 5, padding: "2px 9px", fontSize: 14, fontWeight: 700, color: "var(--green)", fontFamily: "var(--mono)", whiteSpace: "nowrap" }}>#{b.driverNumber || "–"}</span>
+        <span style={{ fontSize: 15, color: "var(--text-1)", fontWeight: 500 }}>{b.customerName}</span>
         <span style={{ fontSize: 14, color: "var(--text-2)", fontFamily: "var(--mono)" }}>{b.phone || "–"}</span>
         <span style={{ fontSize: 13, color: "var(--text-3)", gridColumn: "1/4", paddingTop: 2 }}>
           <span style={{ color: "var(--text-2)" }}>{b.pickupAddress || "–"}</span>
           <span style={{ color: "var(--border-1)", margin: "0 6px" }}>→</span>
           <span style={{ color: "var(--text-2)" }}>{b.dropoffAddress || "–"}</span>
         </span>
-        {b.airline && <span style={{ fontSize: 13, color: "var(--blue)", fontFamily: "var(--mono)", gridColumn: "1/3" }}>✈ {b.airline} {b.flightNumber}{b.flightArrival ? ` · ETA ${b.flightArrival}` : ""}</span>}
+        {b.airline && <span style={{ fontSize: 13, color: "var(--green)", fontFamily: "var(--mono)", gridColumn: "1/3" }}>✈ {b.airline} {b.flightNumber}{b.flightArrival ? ` · ETA ${b.flightArrival}` : ""}</span>}
         <span style={{ fontSize: 13, color: "var(--text-3)", fontFamily: "var(--mono)", gridColumn: b.airline ? "3" : "1/3" }}>{b.passengers}p · {b.luggage}b · {b.tripType === "round-trip" ? "RT" : "OW"}</span>
-        <span style={{ fontSize: 16, fontWeight: 700, color: "var(--green)", fontFamily: "var(--mono)", gridColumn: "3" }}>{b.paymentAmount ? `$${b.paymentAmount}` : "–"}{b.fareBreakdown ? <span style={{ color: "var(--text-3)", fontSize: 11, fontWeight: 400 }}> {b.fareBreakdown}</span> : ""}</span>
+        <span style={{ fontSize: 15, fontWeight: 700, color: "var(--amber)", fontFamily: "var(--mono)", letterSpacing: "0.02em", gridColumn: "3" }}>{b.paymentAmount ? `$${b.paymentAmount}` : "–"}{b.fareBreakdown ? <span style={{ color: "var(--text-3)", fontSize: 11, fontWeight: 400 }}> {b.fareBreakdown}</span> : ""}</span>
       </div>
     </div>
   );
