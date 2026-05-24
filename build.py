@@ -8,10 +8,9 @@ Optionally commits and pushes to GitHub (triggers auto-deploy).
 """
 
 import subprocess, sys, os, re
+sys.stdout.reconfigure(encoding='utf-8')
 
-ESBUILD = os.path.expanduser(
-    "~/.npm-global/lib/node_modules/tsx/node_modules/esbuild/bin/esbuild"
-)
+ESBUILD_CMD = ["npx", "esbuild"]
 JSX_SRC  = "taxi-dispatcher.jsx"
 JSX_PREP = "app-for-compile.jsx"
 JS_OUT   = "app-compiled.js"
@@ -27,7 +26,7 @@ def fail(msg): print(f"  ❌ {msg}"); sys.exit(1)
 
 # ── Step 1: Prep JSX ──
 step("Preparing JSX for compile...")
-with open(JSX_SRC) as f:
+with open(JSX_SRC, encoding='utf-8') as f:
     jsx = f.read()
 
 jsx = jsx.replace(
@@ -40,7 +39,7 @@ jsx = jsx.replace(
 )
 jsx += '\nReactDOM.createRoot(document.getElementById("root")).render(React.createElement(TaxiDispatcherApp));\n'
 
-with open(JSX_PREP, 'w') as f:
+with open(JSX_PREP, 'w', encoding='utf-8') as f:
     f.write(jsx)
 ok(f"Prepared {JSX_PREP}")
 
@@ -48,8 +47,8 @@ ok(f"Prepared {JSX_PREP}")
 # ── Step 2: Compile ──
 step("Compiling with esbuild...")
 r = subprocess.run(
-    [ESBUILD, JSX_PREP, "--jsx=transform", f"--outfile={JS_OUT}", "--target=es2018"],
-    capture_output=True
+    ESBUILD_CMD + [JSX_PREP, "--jsx=transform", f"--outfile={JS_OUT}", "--target=es2018"],
+    capture_output=True, shell=True
 )
 err = r.stderr.decode('utf-8', errors='replace')
 errors   = err.count('[ERROR]')
@@ -63,9 +62,9 @@ ok(f"Compiled — {errors} errors, {warnings} warnings")
 
 # ── Step 3: Inject into HTML ──
 step("Injecting compiled JS into dispatch-hq.html...")
-with open(HTML) as f:
+with open(HTML, encoding='utf-8') as f:
     h = f.read()
-with open(JS_OUT) as f:
+with open(JS_OUT, encoding='utf-8') as f:
     js = f.read()
 
 if START_MARKER not in h:
@@ -77,7 +76,7 @@ start_idx = h.index(START_MARKER) + len(START_MARKER)
 end_idx   = h.index(END_MARKER)
 new_html  = h[:start_idx] + js.replace('</script', '<\\/script') + h[end_idx:]
 
-with open(HTML, 'w') as f:
+with open(HTML, 'w', encoding='utf-8') as f:
     f.write(new_html)
 ok(f"HTML updated — {len(new_html):,} bytes")
 
