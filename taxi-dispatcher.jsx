@@ -235,11 +235,11 @@ const SYNC_CONFIG_KEY = "dispatch-hq-sync-config";
 function loadSyncConfig() {
   try {
     const raw = localStorage.getItem(SYNC_CONFIG_KEY);
-    if (!raw) return { endpointUrl: "", passphraseHash: "", lastSync: "", authToken: "" };
+    if (!raw) return { endpointUrl: "https://script.google.com/macros/s/AKfycbzRFmi7dn8yy_u6m0YCz7YCHt-_-PNm6VHOVdOMixf_vMBq0SF3lWg1sEQhwWI2J8I-/exec", passphraseHash: "", lastSync: "", authToken: "" };
     const parsed = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null) return { endpointUrl: "", passphraseHash: "", lastSync: "" };
+    if (typeof parsed !== "object" || parsed === null) return { endpointUrl: "https://script.google.com/macros/s/AKfycbzRFmi7dn8yy_u6m0YCz7YCHt-_-PNm6VHOVdOMixf_vMBq0SF3lWg1sEQhwWI2J8I-/exec", passphraseHash: "", lastSync: "" };
     return {
-      endpointUrl: typeof parsed.endpointUrl === "string" ? parsed.endpointUrl : "",
+      endpointUrl: typeof parsed.endpointUrl === "string" && parsed.endpointUrl ? parsed.endpointUrl : "https://script.google.com/macros/s/AKfycbzRFmi7dn8yy_u6m0YCz7YCHt-_-PNm6VHOVdOMixf_vMBq0SF3lWg1sEQhwWI2J8I-/exec",
       passphraseHash: typeof parsed.passphraseHash === "string" ? parsed.passphraseHash : "",
       lastSync: typeof parsed.lastSync === "string" ? parsed.lastSync : "",
       authToken: typeof parsed.authToken === "string" ? parsed.authToken : ""
@@ -4230,8 +4230,8 @@ function LoginPage({ endpointUrl: initialEndpointUrl, onLogin, onSaveEndpoint })
   const [error, setError] = ust("");
   const [success, setSuccess] = ust("");
   const [showPass, setShowPass] = ust(false);
-  const [endpointUrl, setEndpointUrl] = ust(initialEndpointUrl || "");
-  const [showUrlField, setShowUrlField] = ust(!initialEndpointUrl);
+  const [endpointUrl, setEndpointUrl] = ust(initialEndpointUrl || "https://script.google.com/macros/s/AKfycbzRFmi7dn8yy_u6m0YCz7YCHt-_-PNm6VHOVdOMixf_vMBq0SF3lWg1sEQhwWI2J8I-/exec");
+  const [showUrlField, setShowUrlField] = ust(false);
 
   // Client-side pre-hash (SHA-256 via Web Crypto) before sending
   async function clientHash(password) {
