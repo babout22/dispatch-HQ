@@ -2647,14 +2647,14 @@ Rules:
               borderBottom: view === v ? "2px solid var(--blue)" : "2px solid transparent",
               borderTop: "2px solid transparent",
               background: "transparent",
-              color: view === v ? "var(--amber)" : "var(--text-3)",
-              fontSize: 11, fontWeight: view === v ? 600 : 400, cursor: "pointer",
-              fontFamily: "var(--mono)", letterSpacing: "0.1em",
+              color: view === v ? "var(--amber)" : "var(--text-2)",
+              fontSize: 13, fontWeight: view === v ? 700 : 500, cursor: "pointer",
+              fontFamily: "var(--mono)", letterSpacing: "0.08em",
               transition: "color 0.15s, border-color 0.15s", whiteSpace: "nowrap"
             }}>{label}</button>
           ))}
           <div style={{ width: 1, height: 18, background: "var(--border-1)", margin: "0 8px" }} />
-          <button onClick={() => clearSession()} style={{ padding: "5px 10px", borderRadius: "var(--r)", border: "1px solid var(--border-0)", background: "transparent", color: "var(--text-2)", fontSize: 12, fontWeight: 500, cursor: "pointer", fontFamily: "var(--sans)", transition: "all 0.15s" }}>Sign out</button>
+          <button onClick={() => clearSession()} style={{ padding: "5px 10px", borderRadius: "var(--r)", border: "1px solid var(--border-0)", background: "transparent", color: "var(--text-2)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "var(--mono)", letterSpacing: "0.08em", transition: "all 0.15s" }}>EXIT</button>
         </nav>
       </header>
 
@@ -2799,7 +2799,7 @@ Rules:
                     boxShadow: showCal ? "0 0 0 1px rgba(76,175,106,0.15)" : missingFields.includes("date") ? "0 0 0 1px rgba(220,38,38,0.15)" : "none",
                     display: "flex", alignItems: "center", justifyContent: "space-between", fontFamily: "inherit", background: inputStyle.background
                   }}>
-                    <span style={{ color: form.date ? "var(--text-1)" : "var(--text-3)" }}>
+                    <span style={{ color: form.date ? "#000" : "var(--text-3)" }}>
                       {form.date ? new Date(form.date + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }) : "Select date"}
                     </span>
                     <span style={{ fontSize: 12, color: "var(--text-3)" }}>{showCal ? "▲" : "▼"}</span>
@@ -2871,7 +2871,7 @@ Rules:
                               <button key={label} onClick={() => { setForm(p => ({...p, date: ds})); setShowCal(false); }} style={{
                                 flex: 1, padding: "6px 0", borderRadius: 6, border: "1px solid var(--border-1)",
                                 background: form.date === ds ? "rgba(220,38,38,0.06)" : "transparent",
-                                color: form.date === ds ? "var(--green)" : "var(--text-2)", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 600
+                                color: "#000", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 600
                               }}>{label}</button>
                             );
                           })}
