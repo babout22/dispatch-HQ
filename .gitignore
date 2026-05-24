@@ -3,3 +3,6 @@ app-for-compile.jsx
 app-compiled.js
 package-lock.json
 google-apps-script.js
+
+# Local Netlify folder
+.netlify

@@ -116,7 +116,7 @@ if push:
     result = subprocess.run(['git', 'commit', '-m', message], capture_output=True)
     if result.returncode != 0:
         out = result.stdout.decode()
-        if 'nothing to commit' in out:
+        if 'nothing to commit' in out or 'no changes added' in out:
             ok("Nothing new to commit — already up to date")
         else:
             fail("git commit failed: " + out)
