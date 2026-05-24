@@ -2624,7 +2624,7 @@ Rules:
       `}</style>
 
       {/* ── Header ── */}
-      <header className="safe-header" style={{ background: "rgba(9,21,8,0.97)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", borderBottom: "1px solid var(--border-0)", boxShadow: "0 1px 0 rgba(76,175,106,0.1)", padding: "0 16px", paddingTop: "env(safe-area-inset-top)", position: "sticky", top: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "space-between", minHeight: 54 }}>
+      <header className="safe-header" style={{ background: "rgba(9,21,8,0.97)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", borderBottom: "1px solid var(--border-0)", boxShadow: "0 1px 0 rgba(76,175,106,0.1)", paddingLeft: 16, paddingRight: 16, paddingTop: "max(env(safe-area-inset-top), 44px)", paddingBottom: 0, position: "sticky", top: 0, zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "space-between", minHeight: "calc(54px + max(env(safe-area-inset-top), 44px))", boxSizing: "border-box" }}>
         <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "linear-gradient(90deg, var(--amber) 0%, rgba(240,165,0,0.2) 50%, transparent 100%)", pointerEvents: "none" }} />
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div style={{ width: 28, height: 28, borderRadius: 7, background: "linear-gradient(135deg, #8a6000, var(--amber))", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, boxShadow: "0 0 12px rgba(240,165,0,0.2)" }}>🚖</div>
@@ -4578,13 +4578,15 @@ function AdminDashboard({ currentUser, endpointUrl, onSignOut }) {
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg-0)", color: "var(--text-1)", fontFamily: "var(--sans)" }}>
       {/* Header */}
-      <div className="safe-header" style={{ background: "rgba(9,21,8,0.97)", borderBottom: "1px solid var(--border-0)", padding: "0 16px", display: "flex", alignItems: "center", gap: 12, minHeight: 54, position: "sticky", top: 0, zIndex: 100, boxShadow: "0 1px 0 rgba(76,175,106,0.1)" }}>
-        <div style={{ width: 28, height: 28, borderRadius: 7, background: "linear-gradient(135deg, #8a6000, var(--amber))", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>🚖</div>
-        <div style={{ flex: 1 }}>
-          <p style={{ fontSize: 15, fontWeight: 700, color: "var(--amber)", margin: 0, letterSpacing: "0.1em", fontFamily: "var(--display)" }}>DISPATCH HQ</p>
-          <p style={{ fontSize: 10, color: "var(--green)", margin: 0, fontWeight: 500, fontFamily: "var(--mono)", letterSpacing: "0.12em" }}>ADMIN DASHBOARD</p>
+      <div className="safe-header" style={{ background: "rgba(9,21,8,0.97)", borderBottom: "1px solid var(--border-0)", paddingLeft: 16, paddingRight: 16, paddingTop: "max(env(safe-area-inset-top), 44px)", paddingBottom: 0, display: "flex", alignItems: "flex-end", gap: 12, minHeight: "calc(54px + max(env(safe-area-inset-top), 44px))", position: "sticky", top: 0, zIndex: 100, boxShadow: "0 1px 0 rgba(76,175,106,0.1)", boxSizing: "border-box" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, paddingBottom: 10, flex: 1 }}>
+          <div style={{ width: 28, height: 28, borderRadius: 7, background: "linear-gradient(135deg, #8a6000, var(--amber))", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>🚖</div>
+          <div>
+            <p style={{ fontSize: 15, fontWeight: 700, color: "var(--amber)", margin: 0, letterSpacing: "0.1em", fontFamily: "var(--display)" }}>DISPATCH HQ</p>
+            <p style={{ fontSize: 10, color: "var(--green)", margin: 0, fontWeight: 500, fontFamily: "var(--mono)", letterSpacing: "0.12em" }}>ADMIN DASHBOARD</p>
+          </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, paddingBottom: 10 }}>
           <span style={{ fontSize: 12, color: "var(--text-3)", fontFamily: "var(--mono)" }}>👤 {currentUser.displayName}</span>
           <button onClick={onSignOut} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid var(--border-0)", background: "transparent", color: "var(--text-2)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "var(--mono)", letterSpacing: "0.08em" }}>EXIT</button>
         </div>
@@ -4847,7 +4849,6 @@ function normalizeSpokenNumbers(text) {
   let t = text.trim();
 
   // ── Korean digit-by-digit sequences ──
-  // e.g. "일이삼" → "123", "공오삼" → "053"
   const KOR_DIGIT = { "영":0,"공":0,"일":1,"이":2,"삼":3,"사":4,"오":5,"육":6,"칠":7,"팔":8,"구":9 };
   t = t.replace(/[영공일이삼사오육칠팔구]{2,}/g, (m) => {
     const digits = Array.from(m).map(c => KOR_DIGIT[c]);
@@ -4855,7 +4856,6 @@ function normalizeSpokenNumbers(text) {
   });
 
   // ── Korean large-unit numbers ──
-  // e.g. "백이십삼" → "123", "이천오백" → "2500", "사만오천" → "45000"
   t = t.replace(/([일이삼사오육칠팔구]?)(천)([일이삼사오육칠팔구]?)(백)?([일이삼사오육칠팔구십]?)/g, (m, k천, 천w, k백, 백w, k십) => {
     if (!천w) return m;
     const thou = (KOR_DIGIT[k천] || 1) * 1000;
@@ -4873,43 +4873,115 @@ function normalizeSpokenNumbers(text) {
     return result > 0 ? String(result) : m;
   });
 
-  // ── English: sequences of digit words ──
-  // e.g. "one two three" → "123" (most common for house numbers)
-  const ENG_DIGIT = { zero:0,one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9 };
-  t = t.replace(/\b(zero|one|two|three|four|five|six|seven|eight|nine)(\s+(zero|one|two|three|four|five|six|seven|eight|nine)){1,4}\b/gi, (m) => {
-    const parts = m.toLowerCase().split(/\s+/);
-    return parts.every(p => ENG_DIGIT[p] !== undefined) ? parts.map(p => ENG_DIGIT[p]).join("") : m;
+  // ── English digit-word helpers ──
+  const ENG_DIGIT = { zero:0,oh:0,one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9 };
+  const ENG_TENS  = { twenty:20,thirty:30,forty:40,fifty:50,sixty:60,seventy:70,eighty:80,ninety:90 };
+  const ENG_TEENS = { ten:10,eleven:11,twelve:12,thirteen:13,fourteen:14,fifteen:15,sixteen:16,seventeen:17,eighteen:18,nineteen:19 };
+
+  // ── ADDRESS NUMBER PATTERNS (most important for street addresses) ──
+
+  // Pattern 1: "thirty two forty four" → 3244  (two compound numbers side by side)
+  // This is how people SAY house numbers — in pairs
+  t = t.replace(/\b(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[- ](one|two|three|four|five|six|seven|eight|nine))?\s+(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[- ](one|two|three|four|five|six|seven|eight|nine))?\b/gi, (m, t1, o1, t2, o2) => {
+    const n1 = ENG_TENS[t1.toLowerCase()] + (o1 ? ENG_DIGIT[o1.toLowerCase()] : 0);
+    const n2 = ENG_TENS[t2.toLowerCase()] + (o2 ? ENG_DIGIT[o2.toLowerCase()] : 0);
+    return String(n1) + String(n2);
   });
 
-  // ── English compound numbers ──
-  // e.g. "twenty three" → "23", "one hundred twenty five" → "125"
-  const ENG_TENS = { twenty:20,thirty:30,forty:40,fifty:50,sixty:60,seventy:70,eighty:80,ninety:90 };
-  const ENG_TEENS = { ten:10,eleven:11,twelve:12,thirteen:13,fourteen:14,fifteen:15,sixteen:16,seventeen:17,eighteen:18,nineteen:19 };
-  // hundreds: "one hundred [twenty] [three]"
+  // Pattern 2: "thirty two forty" → 3240 (tens + tens)
+  t = t.replace(/\b(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)\s+(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)\b/gi, (m, t1, t2) => {
+    return String(ENG_TENS[t1.toLowerCase()]) + String(ENG_TENS[t2.toLowerCase()]);
+  });
+
+  // Pattern 3: "two oh eight" → 208, "one one three" → 113 (digit words with "oh" for zero)
+  // Handles ZIP codes and street numbers with zeros
+  t = t.replace(/\b(zero|oh|one|two|three|four|five|six|seven|eight|nine)(\s+(zero|oh|one|two|three|four|five|six|seven|eight|nine)){2,5}\b/gi, (m) => {
+    const parts = m.toLowerCase().split(/\s+/);
+    if (parts.every(p => ENG_DIGIT[p] !== undefined)) {
+      return parts.map(p => ENG_DIGIT[p]).join("");
+    }
+    return m;
+  });
+
+  // Pattern 4: ZIP codes — 5 digit-words spoken individually "one one three six one" → "11361"
+  // Must come BEFORE compound number patterns to take priority
+  t = t.replace(/\b(zero|oh|one|two|three|four|five|six|seven|eight|nine)\s+(zero|oh|one|two|three|four|five|six|seven|eight|nine)\s+(zero|oh|one|two|three|four|five|six|seven|eight|nine)\s+(zero|oh|one|two|three|four|five|six|seven|eight|nine)\s+(zero|oh|one|two|three|four|five|six|seven|eight|nine)\b/gi, (m, a, b, c, d, e) => {
+    return [a,b,c,d,e].map(w => ENG_DIGIT[w.toLowerCase()]).join("");
+  });
+
+  // Pattern: "two oh eighth" / "two zero eighth" → "208th"
+  // Handles NYC-style ordinal streets spoken as digit + "oh/zero" + ordinal
+  const ORDINAL_SUFFIX = { first:"1st",second:"2nd",third:"3rd",fourth:"4th",fifth:"5th",sixth:"6th",seventh:"7th",eighth:"8th",ninth:"9th",tenth:"10th",eleventh:"11th",twelfth:"12th",thirteenth:"13th",fourteenth:"14th",fifteenth:"15th",sixteenth:"16th",seventeenth:"17th",eighteenth:"18th",nineteenth:"19th",twentieth:"20th",thirtieth:"30th",fortieth:"40th",fiftieth:"50th",sixtieth:"60th",seventieth:"70th",eightieth:"80th",ninetieth:"90th" };
+  // e.g. "two oh eighth" → "208th", "one oh fifth" → "105th"
+  t = t.replace(/\b(one|two|three|four|five|six|seven|eight|nine)\s+(oh|zero)\s+(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth)\b/gi, (m, a, _z, ord) => {
+    return String(ENG_DIGIT[a.toLowerCase()]) + "0" + (ORDINAL_SUFFIX[ord.toLowerCase()] || ord);
+  });
+  // e.g. "two oh eight" → "208" (non-ordinal version)  
+  // e.g. "one oh five" → "105"
+  t = t.replace(/\b(one|two|three|four|five|six|seven|eight|nine)\s+(oh|zero)\s+(one|two|three|four|five|six|seven|eight|nine)\b/gi, (m, a, _z, b) => {
+    return String(ENG_DIGIT[a.toLowerCase()]) + "0" + String(ENG_DIGIT[b.toLowerCase()]);
+  });
+
+  // Pattern 6: "two hundred eighth street" → "208th St"
+  t = t.replace(/\b(one|two|three|four|five|six|seven|eight|nine)\s+hundred\s+(and\s+)?(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[- ](one|two|three|four|five|six|seven|eight|nine))?(st|nd|rd|th)?\b/gi, (m, h, _and, tens, ones, suf) => {
+    const n = ENG_DIGIT[h.toLowerCase()] * 100 + ENG_TENS[tens.toLowerCase()] + (ones ? ENG_DIGIT[ones.toLowerCase()] : 0);
+    const s = suf || (n % 10 === 1 ? "st" : n % 10 === 2 ? "nd" : n % 10 === 3 ? "rd" : "th");
+    return n + s;
+  });
+
+  // Pattern 7: standard hundreds + ones
   t = t.replace(/\b(one|two|three|four|five|six|seven|eight|nine)\s+hundred(?:\s+(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety))?(?:\s+(one|two|three|four|five|six|seven|eight|nine))?\b/gi, (m, h, tens, ones) => {
     const n = (ENG_DIGIT[h.toLowerCase()] * 100) + (tens ? ENG_TENS[tens.toLowerCase()] : 0) + (ones ? ENG_DIGIT[ones.toLowerCase()] : 0);
     return String(n);
   });
-  // tens + optional ones: "forty five" → "45"
+
+  // Pattern 8: teens → numbers
+  t = t.replace(/\b(ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)\b/gi, (m) => String(ENG_TEENS[m.toLowerCase()]));
+
+  // Pattern 9: tens + optional ones
   t = t.replace(/\b(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[- ](one|two|three|four|five|six|seven|eight|nine))?\b/gi, (m, tens, ones) => {
     return String(ENG_TENS[tens.toLowerCase()] + (ones ? ENG_DIGIT[ones.toLowerCase()] : 0));
   });
-  // teens: "thirteen" → "13"
-  t = t.replace(/\b(ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)\b/gi, (m) => String(ENG_TEENS[m.toLowerCase()]));
-  // single digit words left alone (ambiguous — "one way" should stay)
-  // only replace if surrounded by non-alpha context (e.g. "apt one" → "apt 1")
-  t = t.replace(/(?<=\s)(zero|one|two|three|four|five|six|seven|eight|nine)(?=\s*(?:[A-Z#\n]|$))/gi, (m) => String(ENG_DIGIT[m.toLowerCase()]));
 
-  // ── Ordinals: "first" → "1st", "second floor" stays readable ──
-  const ORDINALS = { first:"1st",second:"2nd",third:"3rd",fourth:"4th",fifth:"5th",sixth:"6th",seventh:"7th",eighth:"8th",ninth:"9th",tenth:"10th" };
-  t = t.replace(/\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\b/gi, (m) => ORDINALS[m.toLowerCase()] || m);
+  // ── Street suffix normalization ──
+  t = t.replace(/\b(street|st\.?)\b/gi,    "St");
+  t = t.replace(/\b(avenue|ave\.?)\b/gi,   "Ave");
+  t = t.replace(/\b(boulevard|blvd\.?)\b/gi, "Blvd");
+  t = t.replace(/\b(drive|dr\.?)\b/gi,     "Dr");
+  t = t.replace(/\b(road|rd\.?)\b/gi,      "Rd");
+  t = t.replace(/\b(place|pl\.?)\b/gi,     "Pl");
+  t = t.replace(/\b(court|ct\.?)\b/gi,     "Ct");
+  t = t.replace(/\b(lane|ln\.?)\b/gi,      "Ln");
+  t = t.replace(/\b(expressway|expy)\b/gi, "Expy");
+  t = t.replace(/\b(parkway|pkwy)\b/gi,    "Pkwy");
+  t = t.replace(/\b(highway|hwy)\b/gi,     "Hwy");
+  t = t.replace(/\b(apartment|apt\.?)\b/gi, "Apt");
+  t = t.replace(/\b(unit)\b/gi,            "Unit");
+  t = t.replace(/\b(floor|fl\.?)\b/gi,     "Fl");
+
+  // ── State abbreviations ──
+  t = t.replace(/\bnew york\b/gi,     "NY");
+  t = t.replace(/\bnew jersey\b/gi,   "NJ");
+  t = t.replace(/\bconnecticut\b/gi,  "CT");
+  t = t.replace(/\bpennsylvania\b/gi, "PA");
+
+  // ── Ordinals ──
+  const ORDINALS = { first:"1st",second:"2nd",third:"3rd",fourth:"4th",fifth:"5th",sixth:"6th",seventh:"7th",eighth:"8th",ninth:"9th",tenth:"10th",eleventh:"11th",twelfth:"12th",thirteenth:"13th",fourteenth:"14th",fifteenth:"15th",sixteenth:"16th",seventeenth:"17th",eighteenth:"18th",nineteenth:"19th",twentieth:"20th" };
+  t = t.replace(/\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth)\b/gi, (m) => ORDINALS[m.toLowerCase()] || m);
+
+  // ── Ordinal number + "th/st/nd/rd" fixing ──
+  // "208 th" → "208th"
+  t = t.replace(/(\d+)\s+(st|nd|rd|th)\b/gi, "$1$2");
 
   // ── Korean floor/unit suffixes ──
-  t = t.replace(/(\d+)\s*층/g, "$1F");     // "3층" → "3F"
-  t = t.replace(/(\d+)\s*호/g, "Unit $1"); // "201호" → "Unit 201"
-  t = t.replace(/(\d+)\s*번지/g, "$1");    // "123번지" → "123"
+  t = t.replace(/(\d+)\s*층/g, "$1F");
+  t = t.replace(/(\d+)\s*호/g, "Unit $1");
+  t = t.replace(/(\d+)\s*번지/g, "$1");
 
-  return t.trim();
+  // ── Clean up extra spaces ──
+  t = t.replace(/\s{2,}/g, " ").trim();
+
+  return t;
 }
 
 const WhisperService = (() => {
@@ -4966,13 +5038,11 @@ const WhisperService = (() => {
     }
 
     const result = await asr(float32, {
-      // AUTO-DETECT language — Whisper identifies Korean vs English per-utterance
-      // Forcing a language hurts bilingual speakers who mix both in one address
       language: null,
       task: "transcribe",
-      // Bilingual prompt: primes Whisper to expect address-shaped output in either language
-      // Numbers are explicitly mentioned to bias toward digit-friendly transcription
-      initial_prompt: "주소를 말하고 있습니다. The speaker is saying a street address. Numbers: 123, 45, 7. 숫자: 일이삼, 사오, 칠. New York area: JFK, Manhattan, Queens, Flushing, Brooklyn, Bronx, Newark, LaGuardia.",
+      // Address-specific prompt: teaches Whisper to expect street addresses
+      // Numbers spoken as pairs (house numbers) or digit-by-digit (ZIP codes)
+      initial_prompt: "Street address: 3244 208th St Bayside NY 11361. 주소: 서울시 강남구. House numbers said as pairs: thirty two forty four = 3244, twenty oh eight = 208. ZIP codes digit by digit: one one three six one = 11361. Streets: St Ave Blvd Dr Rd Pl. Airports: JFK LGA EWR. Cities: Bayside Flushing Manhattan Brooklyn Queens Bronx Newark Fort Lee Hackensack.",
     });
 
     const raw = (result.text || "").trim().replace(/^[\s.,]+|[\s.,]+$/g, "");
