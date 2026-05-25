@@ -1235,6 +1235,77 @@ const BackupService = {
 };
 
 // ── Main App ──
+// ── Time Picker Dropdown — proper component (avoids hooks-in-IIFE crash) ──
+function TimePickerDropdown({ selected, onSelect, allSlots }) {
+  const PINNED = ["5:00 AM","6:00 AM","7:00 AM","8:00 AM","6:00 PM","10:00 PM"];
+  const [q, setQ] = useState("");
+
+  const matched = q ? allSlots.filter(slot => {
+    const [time] = slot.split(" ");
+    const [h, m] = time.split(":");
+    const flat = h + m;
+    const pad = h.padStart(2,"0") + m;
+    return flat.startsWith(q) || pad.startsWith(q) || h === q;
+  }).slice(0, 5) : [];
+
+  return (
+    <div data-picker style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 200, background: "var(--bg-1)", border: "1px solid var(--border-1)", borderRadius: 12, boxShadow: "0 8px 32px rgba(0,0,0,0.5)", width: 260, padding: 10 }}>
+      {/* Smart search */}
+      <input
+        autoFocus
+        type="number"
+        value={q}
+        onChange={e => setQ(e.target.value)}
+        placeholder="Type: 7, 730, 6, 1200..."
+        style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid var(--amber)", background: "#fff", color: "#1a0a00", fontSize: 14, fontWeight: 700, fontFamily: "var(--mono)", outline: "none", marginBottom: 8, boxSizing: "border-box" }}
+      />
+      {/* Search results */}
+      {q && matched.length > 0 && (
+        <div style={{ marginBottom: 8, borderRadius: 6, overflow: "hidden", border: "1px solid var(--border-0)" }}>
+          {matched.map(t => (
+            <button key={t} onClick={() => onSelect(t)} style={{ width: "100%", padding: "10px 12px", border: "none", borderBottom: "1px solid var(--border-0)", background: selected === t ? "rgba(240,165,0,0.1)" : "#fff", color: "#1a0a00", fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "var(--mono)", textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span>{t}</span>
+              {selected === t && <span style={{ color: "var(--amber)" }}>✓</span>}
+            </button>
+          ))}
+        </div>
+      )}
+      {q && matched.length === 0 && (
+        <p style={{ fontSize: 11, color: "var(--text-3)", fontFamily: "var(--mono)", textAlign: "center", marginBottom: 8 }}>No match — try 5, 7, 730, 1200</p>
+      )}
+      {/* Pinned + full grid when not searching */}
+      {!q && (
+        <>
+          <p style={{ fontSize: 9, color: "var(--green)", fontFamily: "var(--mono)", letterSpacing: "0.16em", marginBottom: 6 }}>COMMON TIMES</p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 5, marginBottom: 8 }}>
+            {PINNED.map(t => {
+              const [time, ampm] = t.split(" ");
+              return (
+                <button key={t} onClick={() => onSelect(t)} style={{ padding: "8px 4px", borderRadius: 6, border: selected === t ? "1px solid var(--amber)" : "1px solid var(--border-0)", background: selected === t ? "rgba(240,165,0,0.1)" : "var(--bg-2)", cursor: "pointer", textAlign: "center" }}>
+                  <span style={{ display: "block", fontSize: 13, fontWeight: 700, color: selected === t ? "var(--amber)" : "var(--text-1)", fontFamily: "var(--mono)" }}>{time}</span>
+                  <span style={{ display: "block", fontSize: 9, color: "var(--green)" }}>{ampm}</span>
+                </button>
+              );
+            })}
+          </div>
+          <p style={{ fontSize: 9, color: "var(--green)", fontFamily: "var(--mono)", letterSpacing: "0.16em", marginBottom: 6 }}>ALL TIMES</p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 3, maxHeight: 180, overflowY: "auto" }}>
+            {allSlots.map(t => {
+              const [time, ampm] = t.split(" ");
+              return (
+                <button key={t} onClick={() => onSelect(t)} style={{ padding: "5px 2px", borderRadius: 4, border: selected === t ? "1px solid var(--amber)" : "1px solid var(--border-0)", background: selected === t ? "rgba(240,165,0,0.1)" : "var(--bg-2)", cursor: "pointer", textAlign: "center" }}>
+                  <span style={{ display: "block", fontSize: 11, fontWeight: selected === t ? 700 : 400, color: selected === t ? "var(--amber)" : "var(--text-1)", fontFamily: "var(--mono)" }}>{time}</span>
+                  <span style={{ display: "block", fontSize: 8, color: "var(--green)" }}>{ampm}</span>
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function DispatcherApp({ session, onLogout }) {
   const [view, setView] = useState("booking");
   const [priceCheckMode, setPriceCheckMode] = useState(false);
@@ -2888,88 +2959,20 @@ Rules:
                     <span style={{ fontSize: 12, color: "#8892a8" }}>{showTimePicker ? "▲" : "▼"}</span>
                   </button>
 
-                  {showTimePicker && (() => {
-                    const ALL_SLOTS = [...AM_SLOTS, ...PM_SLOTS];
-                    const PINNED = ["5:00 AM","6:00 AM","7:00 AM","8:00 AM","6:00 PM","10:00 PM"];
-                    const [tSearch, setTSearch] = React.useState("");
-                    const pickTime = (t) => {
-                      const [time, period] = t.split(" ");
-                      const [h, m] = time.split(":").map(Number);
-                      let h24 = period === "PM" && h !== 12 ? h + 12 : period === "AM" && h === 12 ? 0 : h;
-                      const customTime = `${String(h24).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
-                      setForm(p => ({...p, timeSlot: t, customTime}));
-                      setShowTimePicker(false);
-                    };
-                    const ENG_DIGIT = {zero:0,oh:0,one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9};
-                    const matchSlots = (q) => {
-                      if (!q) return [];
-                      return ALL_SLOTS.filter(slot => {
-                        const [time] = slot.split(" ");
-                        const [h, m] = time.split(":");
-                        const flat = h + m;
-                        const pad = h.padStart(2,"0") + m;
-                        return flat.startsWith(q) || pad.startsWith(q) || h === q;
-                      }).slice(0, 5);
-                    };
-                    const searched = matchSlots(tSearch);
-                    return (
-                      <div data-picker style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 200, background: "var(--bg-1)", border: "1px solid var(--border-1)", borderRadius: 12, boxShadow: "0 8px 32px rgba(0,0,0,0.5)", width: 260, padding: 10 }}>
-                        {/* Smart search */}
-                        <input
-                          autoFocus
-                          type="number"
-                          value={tSearch}
-                          onChange={e => setTSearch(e.target.value)}
-                          placeholder="Type: 7, 730, 6, 1200..."
-                          style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid var(--amber)", background: "#fff", color: "#1a0a00", fontSize: 14, fontWeight: 700, fontFamily: "var(--mono)", outline: "none", marginBottom: 8, boxSizing: "border-box" }}
-                        />
-                        {/* Search results */}
-                        {tSearch && searched.length > 0 && (
-                          <div style={{ marginBottom: 8, borderRadius: 6, overflow: "hidden", border: "1px solid var(--border-0)" }}>
-                            {searched.map(t => (
-                              <button key={t} onClick={() => pickTime(t)} style={{ width: "100%", padding: "10px 12px", border: "none", borderBottom: "1px solid var(--border-0)", background: form.timeSlot === t ? "rgba(240,165,0,0.1)" : "#fff", color: "#1a0a00", fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "var(--mono)", textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                                <span>{t}</span>
-                                {form.timeSlot === t && <span style={{ color: "var(--amber)", fontSize: 12 }}>✓</span>}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                        {tSearch && searched.length === 0 && (
-                          <p style={{ fontSize: 11, color: "var(--text-3)", fontFamily: "var(--mono)", textAlign: "center", marginBottom: 8 }}>No match — try 5, 7, 730, 1200</p>
-                        )}
-                        {/* Pinned common times */}
-                        {!tSearch && (
-                          <>
-                            <p style={{ fontSize: 9, color: "var(--green)", fontFamily: "var(--mono)", letterSpacing: "0.16em", marginBottom: 6 }}>COMMON TIMES</p>
-                            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 5, marginBottom: 8 }}>
-                              {PINNED.map(t => {
-                                const [time, ampm] = t.split(" ");
-                                return (
-                                  <button key={t} onClick={() => pickTime(t)} style={{ padding: "8px 4px", borderRadius: 6, border: form.timeSlot === t ? "1px solid var(--amber)" : "1px solid var(--border-0)", background: form.timeSlot === t ? "rgba(240,165,0,0.1)" : "var(--bg-2)", cursor: "pointer", textAlign: "center" }}>
-                                    <span style={{ display: "block", fontSize: 13, fontWeight: 700, color: form.timeSlot === t ? "var(--amber)" : "var(--text-1)", fontFamily: "var(--mono)" }}>{time}</span>
-                                    <span style={{ display: "block", fontSize: 9, color: "var(--green)", letterSpacing: "0.08em" }}>{ampm}</span>
-                                  </button>
-                                );
-                              })}
-                            </div>
-                            {/* Full grid */}
-                            <p style={{ fontSize: 9, color: "var(--green)", fontFamily: "var(--mono)", letterSpacing: "0.16em", marginBottom: 6 }}>ALL TIMES</p>
-                            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 3, maxHeight: 180, overflowY: "auto" }}>
-                              {ALL_SLOTS.map(t => {
-                                const [time, ampm] = t.split(" ");
-                                return (
-                                  <button key={t} onClick={() => pickTime(t)} style={{ padding: "5px 2px", borderRadius: 4, border: form.timeSlot === t ? "1px solid var(--amber)" : "1px solid var(--border-0)", background: form.timeSlot === t ? "rgba(240,165,0,0.1)" : "var(--bg-2)", cursor: "pointer", textAlign: "center" }}>
-                                    <span style={{ display: "block", fontSize: 11, fontWeight: form.timeSlot === t ? 700 : 400, color: form.timeSlot === t ? "var(--amber)" : "var(--text-1)", fontFamily: "var(--mono)" }}>{time}</span>
-                                    <span style={{ display: "block", fontSize: 8, color: "var(--green)" }}>{ampm}</span>
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    );
-                  })()}
+                  {showTimePicker && (
+                    <TimePickerDropdown
+                      selected={form.timeSlot}
+                      onSelect={(t) => {
+                        const [time, period] = t.split(" ");
+                        const [h, m] = time.split(":").map(Number);
+                        let h24 = period === "PM" && h !== 12 ? h + 12 : period === "AM" && h === 12 ? 0 : h;
+                        const customTime = `${String(h24).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
+                        setForm(p => ({...p, timeSlot: t, customTime}));
+                        setShowTimePicker(false);
+                      }}
+                      allSlots={[...AM_SLOTS, ...PM_SLOTS]}
+                    />
+                  )}
                 </div>
 
               </div>
