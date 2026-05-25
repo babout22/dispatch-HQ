@@ -1025,109 +1025,31 @@ async function executeFlight(input) {
   }
 }
 async function runAIAssist(flightNumber, airline, city, date, pickup, dropoff, tripType, passengers) {
-  var _a, _b, _c;
-  if (isStandaloneMode()) {
-    return { flight: null, fare: null, error: "AI features require the Claude.ai app. Use Quick Fill or enter details manually." };
-  }
-  const hasFlightQuery = !!(flightNumber || airline && city);
+  const hasFlightQuery = !!(flightNumber || airline);
   const hasFareQuery = !!(pickup && dropoff);
   if (!hasFlightQuery && !hasFareQuery) return { flight: null, fare: null };
-  let userPrompt = "Please help me with the following tasks IN PARALLEL (call both tools simultaneously if both are needed):\n\n";
+  const results = { flight: null, fare: null };
+  const tasks = [];
   if (hasFlightQuery) {
-    const safeFlightNum = (flightNumber || "").replace(/[^A-Z0-9]/gi, "").slice(0, 10);
-    const safeAirline = (airline || "").replace(/[^a-zA-Z0-9 ]/g, "").slice(0, 30);
-    userPrompt += `TASK 1 \u2014 FLIGHT STATUS: Look up flight status for ${safeFlightNum ? `flight ${safeFlightNum}` : `${safeAirline} flights`}${date ? ` on ${date}` : " today"}.
-
-`;
-  }
-  if (hasFareQuery) {
-    const safePickup = (pickup || "").replace(/[^a-zA-Z0-9 ,.'#-]/g, "").slice(0, 100);
-    const safeDropoff = (dropoff || "").replace(/[^a-zA-Z0-9 ,.'#-]/g, "").slice(0, 100);
-    userPrompt += `TASK 2 \u2014 FARE CALCULATION: Calculate the taxi fare from "${safePickup}" to "${safeDropoff}", trip type: ${tripType || "one-way"}, ${passengers || 1} passenger(s).
-
-`;
-  }
-  userPrompt += "Use the appropriate tools now. Call them in PARALLEL \u2014 do not wait for one before calling the other.";
-  try {
-    const resp = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 1e3,
-        system: "You are a dispatcher assistant. When given flight lookup and fare calculation tasks, ALWAYS call both tools in parallel (in the same response). Never call just one if both are requested. Use the tools provided \u2014 do not answer from memory.",
-        messages: [{ role: "user", content: userPrompt }],
-        tools: TOOL_DEFINITIONS
-      })
-    });
-    if (!resp.ok) return { flight: null, fare: null, error: `API HTTP ${resp.status}` };
-    const data = await resp.json();
-    if (data.type === "error") return { flight: null, fare: null, error: ((_a = data.error) == null ? void 0 : _a.message) || "API error" };
-    if (!data.content || !Array.isArray(data.content)) return { flight: null, fare: null, error: "Empty API response" };
-    const toolCalls = data.content.filter((b) => b.type === "tool_use");
-    if (toolCalls.length === 0) {
-      const text = data.content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
-      return { flight: null, fare: null, text };
-    }
-    const toolResults = await Promise.all(
-      toolCalls.map(async (tc) => {
-        try {
-          return { id: tc.id, name: tc.name, result: await executeToolCall(tc.name, tc.input) };
-        } catch (err) {
-          return { id: tc.id, name: tc.name, result: { error: err.message } };
-        }
+    tasks.push(
+      executeFlight({ flight_number: flightNumber, airline, city, date }).then((r) => {
+        results.flight = r;
+      }).catch((e) => {
+        results.flight = { error: e.message, status: "error" };
       })
     );
-    const toolResultMessages = toolResults.map((tr) => ({
-      type: "tool_result",
-      tool_use_id: tr.id,
-      content: JSON.stringify(tr.result)
-    }));
-    try {
-      const followUp = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1e3,
-          system: "Respond ONLY with a JSON object (no markdown backticks). Fields: flight (object with flight_number, airline, status, scheduled_arrival, actual_arrival, delay_minutes, terminal, gate, origin_code, destination_code, origin_city, destination_city \u2014 or null if no flight lookup), fare (object with route, base_fare, toll, surcharges, total, found \u2014 or null if no fare lookup), summary (short 1-line dispatcher summary).",
-          messages: [
-            { role: "user", content: userPrompt },
-            { role: "assistant", content: data.content },
-            { role: "user", content: toolResultMessages }
-          ],
-          tools: TOOL_DEFINITIONS
-        })
-      });
-      if (followUp.ok) {
-        const followUpData = await followUp.json();
-        if (followUpData.content && Array.isArray(followUpData.content)) {
-          const finalText = followUpData.content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
-          if (finalText) {
-            try {
-              const jsonMatch = finalText.replace(/```json|```/g, "").trim().match(/\{[\s\S]*\}/);
-              if (jsonMatch) {
-                const parsed = JSON.parse(jsonMatch[0]);
-                if (parsed.flight && parsed.flight.delay_minutes != null) parsed.flight.delay_minutes = Number(parsed.flight.delay_minutes) || 0;
-                return parsed;
-              }
-            } catch (e) {
-            }
-          }
-        }
-      }
-    } catch (e) {
-    }
-    const flightResult = toolResults.find((r) => r.name === "lookup_flight_status");
-    const fareResult = toolResults.find((r) => r.name === "calculate_fare");
-    return {
-      flight: ((_b = flightResult == null ? void 0 : flightResult.result) == null ? void 0 : _b.error) ? null : (flightResult == null ? void 0 : flightResult.result) || null,
-      fare: ((_c = fareResult == null ? void 0 : fareResult.result) == null ? void 0 : _c.error) ? null : (fareResult == null ? void 0 : fareResult.result) || null,
-      summary: "Results retrieved (direct)"
-    };
-  } catch (err) {
-    return { flight: null, fare: null, error: "AI Assist failed: " + err.message };
   }
+  if (hasFareQuery) {
+    tasks.push(
+      Promise.resolve(executeFare({ pickup_location: pickup, dropoff_location: dropoff, passengers: parseInt(passengers) || 1, trip_type: tripType || "one-way" })).then((r) => {
+        results.fare = r;
+      }).catch((e) => {
+        results.fare = { error: e.message };
+      })
+    );
+  }
+  await Promise.all(tasks);
+  return results;
 }
 const DRIVERS = [
   // ── NYC Drivers ──
@@ -3225,7 +3147,7 @@ Rules:
     "button",
     {
       onClick: lookupFlightOnly,
-      disabled: aiLoading || !form.flightNumber && !form.airline || isStandaloneMode(),
+      disabled: aiLoading || !form.flightNumber && !form.airline,
       style: {
         flex: 1,
         padding: "10px 8px",
@@ -3233,19 +3155,20 @@ Rules:
         border: "none",
         fontSize: 14,
         fontWeight: 700,
-        background: !form.flightNumber && !form.airline ? "var(--bg-2)" : "linear-gradient(135deg, #1a3a6a, #2255aa)",
-        color: !form.flightNumber && !form.airline ? "var(--text-1)" : "#fff",
+        background: !form.flightNumber && !form.airline ? "var(--bg-2)" : "var(--amber)",
+        color: !form.flightNumber && !form.airline ? "var(--text-3)" : "#0a0a0a",
         cursor: !form.flightNumber && !form.airline || aiLoading ? "default" : "pointer",
-        fontFamily: "inherit",
+        fontFamily: "var(--mono)",
+        letterSpacing: "0.06em",
         opacity: aiLoading ? 0.5 : 1
       }
     },
-    "\u2708 Check Flight"
+    aiLoading ? "\u23F3 CHECKING..." : "\u2708 CHECK FLIGHT"
   ), /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: runAIAssistHandler,
-      disabled: aiLoading || isStandaloneMode() || !form.flightNumber && !form.airline && (!form.pickupAddress || !form.dropoffAddress),
+      disabled: aiLoading || !form.flightNumber && !form.airline && (!form.pickupAddress || !form.dropoffAddress),
       style: {
         flex: 2,
         padding: "10px 8px",
@@ -3253,26 +3176,32 @@ Rules:
         border: "none",
         fontSize: 14,
         fontWeight: 700,
-        background: aiLoading ? "var(--bg-2)" : "linear-gradient(135deg, #2255aa, #3b9eff)",
-        color: "#fff",
+        background: aiLoading ? "var(--bg-2)" : "var(--green)",
+        color: aiLoading ? "var(--text-3)" : "#0a0a0a",
         cursor: aiLoading ? "default" : "pointer",
-        fontFamily: "inherit",
-        boxShadow: aiLoading ? "none" : "0 2px 12px rgba(59,158,255,0.2)",
+        fontFamily: "var(--mono)",
+        letterSpacing: "0.06em",
+        boxShadow: aiLoading ? "none" : "0 2px 12px rgba(76,175,106,0.2)",
         opacity: aiLoading ? 0.5 : 1
       }
     },
-    aiLoading ? `\u23F3 Searching... (${aiTimer}s)` : "\u2708 Check Flight + Fare"
-  )), aiSummary && /* @__PURE__ */ React.createElement("div", { style: { padding: "8px 12px", background: "rgba(59,158,255,0.06)", border: "1px solid #1a2a4a", borderRadius: 8, marginBottom: 12 } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, color: "var(--green)" } }, aiSummary)), aiError && /* @__PURE__ */ React.createElement("div", { style: { padding: "8px 12px", background: "rgba(220,38,38,0.04)", border: "1px solid #3a1a1a", borderRadius: 8, marginBottom: 12 } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 13, color: "var(--red)" } }, "\u26A0 ", aiError)), flightData && !flightData.error && flightData.status !== "error" && flightData.status !== "unavailable" && /* @__PURE__ */ React.createElement("div", { style: { background: "var(--bg-1)", border: "1px solid #1a2a4a", borderRadius: 10, padding: 14, marginBottom: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 10 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 18 } }, "\u2708"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 16, fontWeight: 700, color: "#fff" } }, flightData.flight_number || form.flightNumber || "Flight", flightData.airline && /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 400, color: "var(--text-2)", fontSize: 14 } }, " \xB7 ", flightData.airline))), /* @__PURE__ */ React.createElement("span", { style: {
+    aiLoading ? `\u23F3 CHECKING... (${aiTimer}s)` : "\u2708 CHECK FLIGHT + FARE"
+  )), aiSummary && /* @__PURE__ */ React.createElement("div", { style: { padding: "8px 12px", background: "rgba(59,158,255,0.06)", border: "1px solid #1a2a4a", borderRadius: 8, marginBottom: 12 } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, color: "var(--green)" } }, aiSummary)), aiError && /* @__PURE__ */ React.createElement("div", { style: { padding: "8px 12px", background: "rgba(220,38,38,0.04)", border: "1px solid #3a1a1a", borderRadius: 8, marginBottom: 12 } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 13, color: "var(--red)" } }, "\u26A0 ", aiError)), flightData && !flightData.error && flightData.status !== "error" && flightData.status !== "unavailable" && /* @__PURE__ */ React.createElement("div", { style: { background: "var(--bg-1)", border: "1px solid var(--border-1)", borderRadius: 10, padding: 14, marginBottom: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 10 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 18 } }, "\u2708"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 16, fontWeight: 700, color: "var(--text-1)" } }, flightData.flight_number || form.flightNumber || "Flight", flightData.airline && /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 400, color: "var(--text-2)", fontSize: 14 } }, " \xB7 ", flightData.airline))), /* @__PURE__ */ React.createElement("span", { style: {
     marginLeft: "auto",
     padding: "3px 10px",
     borderRadius: 6,
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: 700,
-    background: flightData.status === "on-time" || flightData.status === "landed" ? "rgba(80,200,80,0.15)" : flightData.status === "delayed" ? "rgba(255,200,80,0.15)" : flightData.status === "cancelled" ? "rgba(255,58,48,0.15)" : "rgba(150,150,150,0.1)",
-    color: flightData.status === "on-time" || flightData.status === "landed" ? "var(--green)" : flightData.status === "delayed" ? "var(--amber)" : flightData.status === "cancelled" ? "var(--red)" : "var(--text-2)",
-    border: `1px solid ${flightData.status === "on-time" || flightData.status === "landed" ? "rgba(5,150,105,0.2)" : flightData.status === "delayed" ? "rgba(217,119,6,0.2)" : flightData.status === "cancelled" ? "rgba(220,38,38,0.2)" : "var(--text-1)"}`,
+    background: flightData.status === "scheduled" || flightData.status === "landed" || flightData.status === "on-time" ? "rgba(5,150,105,0.1)" : flightData.delay_minutes > 0 ? "rgba(217,119,6,0.1)" : flightData.status === "cancelled" ? "rgba(220,38,38,0.1)" : "rgba(150,150,150,0.1)",
+    color: flightData.status === "scheduled" || flightData.status === "landed" || flightData.status === "on-time" ? "var(--green)" : flightData.delay_minutes > 0 ? "var(--amber)" : flightData.status === "cancelled" ? "var(--red)" : "var(--text-2)",
+    border: `1px solid ${flightData.status === "scheduled" || flightData.status === "landed" ? "rgba(5,150,105,0.2)" : flightData.delay_minutes > 0 ? "rgba(217,119,6,0.2)" : "var(--border-0)"}`,
+    fontFamily: "var(--mono)",
+    letterSpacing: "0.08em",
     textTransform: "uppercase"
-  } }, flightData.status || "Unknown", Number(flightData.delay_minutes) > 0 && ` +${flightData.delay_minutes}m`)), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 8, alignItems: "center", marginBottom: 8 } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 18, fontWeight: 700, color: "var(--green)" } }, flightData.origin_code || "---"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 12, color: "var(--text-2)" } }, flightData.origin_city || "Origin"), flightData.scheduled_departure && /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, color: "var(--text-2)", fontWeight: 500, marginTop: 2 } }, flightData.actual_departure ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("s", { style: { color: "#7a8498" } }, flightData.scheduled_departure), " ", /* @__PURE__ */ React.createElement("span", { style: { color: "var(--amber)" } }, flightData.actual_departure)) : flightData.scheduled_departure)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 16, color: "#909aaa" } }, "\u2192"), /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 18, fontWeight: 700, color: "var(--green)" } }, flightData.destination_code || "---"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 12, color: "var(--text-2)" } }, flightData.destination_city || "Destination"), flightData.scheduled_arrival && /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, color: "var(--text-2)", fontWeight: 500, marginTop: 2 } }, flightData.actual_arrival && flightData.actual_arrival !== flightData.scheduled_arrival ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("s", { style: { color: "#7a8498" } }, flightData.scheduled_arrival), " ", /* @__PURE__ */ React.createElement("span", { style: { color: "var(--amber)" } }, flightData.actual_arrival)) : flightData.scheduled_arrival))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" } }, flightData.terminal && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "var(--text-2)", background: "var(--bg-2)", padding: "2px 8px", borderRadius: 4 } }, "Terminal ", flightData.terminal), flightData.gate && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "var(--text-2)", background: "var(--bg-2)", padding: "2px 8px", borderRadius: 4 } }, "Gate ", flightData.gate), flightData.aircraft_type && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "var(--text-2)", background: "var(--bg-2)", padding: "2px 8px", borderRadius: 4 } }, flightData.aircraft_type))), fareData && fareData.found && /* @__PURE__ */ React.createElement("div", { style: { background: "var(--bg-1)", border: "1px solid #1a3a1a", borderRadius: 10, padding: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 16 } }, "\u{1F4B0}"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, fontWeight: 600, color: "#fff" } }, fareData.route || "Fare")), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 22, fontWeight: 800, color: "#4ade80" } }, "$", fareData.total)), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, flexWrap: "wrap", fontSize: 13 } }, /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-2)" } }, "Base: ", /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-2)" } }, "$", fareData.base_fare)), fareData.toll > 0 && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-2)" } }, "Toll: ", /* @__PURE__ */ React.createElement("span", { style: { color: "var(--amber)" } }, "$", fareData.toll)), fareData.surcharges && fareData.surcharges.length > 0 && fareData.surcharges.map((s, i) => /* @__PURE__ */ React.createElement("span", { key: i, style: { color: "#a86c32" } }, s)))), !flightData && !fareData && !aiLoading && !aiError && /* @__PURE__ */ React.createElement("p", { style: { fontSize: 13, color: "#909aaa", textAlign: "center", padding: 8 } }, "Enter a flight # or pickup/dropoff above, then press a lookup button. Both run in parallel when available.")), /* @__PURE__ */ React.createElement("div", { style: { background: "var(--bg-1)", border: "1px solid #1e2028", borderRadius: 14, padding: 18, marginBottom: 14 } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, fontWeight: 700, color: "var(--green)", marginBottom: 4, letterSpacing: "0.08em" } }, "\u{1F696} Fleet Assignment"), (() => {
+  } }, flightData.status || "Unknown", Number(flightData.delay_minutes) > 0 && ` +${flightData.delay_minutes}m`)), flightData.message && /* @__PURE__ */ React.createElement("div", { style: { background: "rgba(240,165,0,0.06)", border: "1px solid var(--amber-border)", borderRadius: 8, padding: "8px 12px", marginBottom: 10, textAlign: "center" } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, fontWeight: 700, color: "var(--amber)", fontFamily: "var(--mono)" } }, "\u2708 ", flightData.message)), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 8, alignItems: "center", marginBottom: 8 } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 18, fontWeight: 700, color: "var(--green)", fontFamily: "var(--mono)" } }, flightData.origin_code || flightData.departure || "---"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 11, color: "var(--text-2)" } }, "Origin")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 16, color: "var(--text-3)" } }, "\u2192"), /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 18, fontWeight: 700, color: "var(--green)", fontFamily: "var(--mono)" } }, flightData.destination_code || flightData.arrival || "---"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 11, color: "var(--text-2)" } }, "Arrival"), (flightData.arrivalTime || flightData.actual_arrival || flightData.scheduled_arrival) && /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, fontWeight: 700, color: flightData.delay_minutes > 0 ? "var(--amber)" : "var(--text-1)", marginTop: 3, fontFamily: "var(--mono)" } }, flightData.arrivalTime || flightData.actual_arrival || flightData.scheduled_arrival))), (flightData.arrivalTime || flightData.actual_arrival) && /* @__PURE__ */ React.createElement("button", { onClick: () => {
+    const t = flightData.arrivalTime || flightData.actual_arrival;
+    setForm((p) => ({ ...p, flightArrival: t }));
+  }, style: { width: "100%", padding: "6px", borderRadius: 6, border: "1px solid var(--border-0)", background: "transparent", color: "var(--green)", fontSize: 12, cursor: "pointer", fontFamily: "var(--mono)", letterSpacing: "0.06em" } }, "\u26A1 USE ", flightData.arrivalTime || flightData.actual_arrival, " AS ARRIVAL TIME")), fareData && fareData.found && /* @__PURE__ */ React.createElement("div", { style: { background: "var(--bg-1)", border: "1px solid #1a3a1a", borderRadius: 10, padding: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 16 } }, "\u{1F4B0}"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, fontWeight: 600, color: "#fff" } }, fareData.route || "Fare")), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 22, fontWeight: 800, color: "#4ade80" } }, "$", fareData.total)), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, flexWrap: "wrap", fontSize: 13 } }, /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-2)" } }, "Base: ", /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-2)" } }, "$", fareData.base_fare)), fareData.toll > 0 && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-2)" } }, "Toll: ", /* @__PURE__ */ React.createElement("span", { style: { color: "var(--amber)" } }, "$", fareData.toll)), fareData.surcharges && fareData.surcharges.length > 0 && fareData.surcharges.map((s, i) => /* @__PURE__ */ React.createElement("span", { key: i, style: { color: "#a86c32" } }, s)))), !flightData && !fareData && !aiLoading && !aiError && /* @__PURE__ */ React.createElement("p", { style: { fontSize: 13, color: "#909aaa", textAlign: "center", padding: 8 } }, "Enter a flight # or pickup/dropoff above, then press a lookup button. Both run in parallel when available.")), /* @__PURE__ */ React.createElement("div", { style: { background: "var(--bg-1)", border: "1px solid #1e2028", borderRadius: 14, padding: 18, marginBottom: 14 } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, fontWeight: 700, color: "var(--green)", marginBottom: 4, letterSpacing: "0.08em" } }, "\u{1F696} Fleet Assignment"), (() => {
     const pickup = normalizeLocation(form.pickupAddress);
     const dropoff = normalizeLocation(form.dropoffAddress);
     const needsPickup = ["JFK", "LGA", "EWR"].includes(pickup);

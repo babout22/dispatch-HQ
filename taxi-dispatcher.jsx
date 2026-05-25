@@ -706,116 +706,35 @@ async function executeFlight(input) {
 }
 
 async function runAIAssist(flightNumber, airline, city, date, pickup, dropoff, tripType, passengers) {
-  if (isStandaloneMode()) {
-    return { flight: null, fare: null, error: "AI features require the Claude.ai app. Use Quick Fill or enter details manually." };
-  }
-  const hasFlightQuery = !!(flightNumber || (airline && city));
+  const hasFlightQuery = !!(flightNumber || airline);
   const hasFareQuery = !!(pickup && dropoff);
   if (!hasFlightQuery && !hasFareQuery) return { flight: null, fare: null };
 
-  // Build a prompt that will cause parallel tool calls
-  let userPrompt = "Please help me with the following tasks IN PARALLEL (call both tools simultaneously if both are needed):\n\n";
+  const results = { flight: null, fare: null };
+
+  // Run flight + fare in parallel
+  const tasks = [];
+
   if (hasFlightQuery) {
-    const safeFlightNum = (flightNumber || "").replace(/[^A-Z0-9]/gi, "").slice(0, 10);
-    const safeAirline = (airline || "").replace(/[^a-zA-Z0-9 ]/g, "").slice(0, 30);
-    userPrompt += `TASK 1 — FLIGHT STATUS: Look up flight status for ${safeFlightNum ? `flight ${safeFlightNum}` : `${safeAirline} flights`}${date ? ` on ${date}` : " today"}.\n\n`;
-  }
-  if (hasFareQuery) {
-    const safePickup = (pickup || "").replace(/[^a-zA-Z0-9 ,.'#-]/g, "").slice(0, 100);
-    const safeDropoff = (dropoff || "").replace(/[^a-zA-Z0-9 ,.'#-]/g, "").slice(0, 100);
-    userPrompt += `TASK 2 — FARE CALCULATION: Calculate the taxi fare from "${safePickup}" to "${safeDropoff}", trip type: ${tripType || "one-way"}, ${passengers || 1} passenger(s).\n\n`;
-  }
-  userPrompt += "Use the appropriate tools now. Call them in PARALLEL — do not wait for one before calling the other.";
-
-  try {
-    const resp = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 1000,
-        system: "You are a dispatcher assistant. When given flight lookup and fare calculation tasks, ALWAYS call both tools in parallel (in the same response). Never call just one if both are requested. Use the tools provided — do not answer from memory.",
-        messages: [{ role: "user", content: userPrompt }],
-        tools: TOOL_DEFINITIONS
-      })
-    });
-    if (!resp.ok) return { flight: null, fare: null, error: `API HTTP ${resp.status}` };
-    const data = await resp.json();
-    if (data.type === "error") return { flight: null, fare: null, error: data.error?.message || "API error" };
-    if (!data.content || !Array.isArray(data.content)) return { flight: null, fare: null, error: "Empty API response" };
-
-    const toolCalls = data.content.filter(b => b.type === "tool_use");
-
-    if (toolCalls.length === 0) {
-      const text = data.content.filter(b => b.type === "text").map(b => b.text).join("\n");
-      return { flight: null, fare: null, text };
-    }
-
-    // Execute all tool calls in parallel
-    const toolResults = await Promise.all(
-      toolCalls.map(async (tc) => {
-        try {
-          return { id: tc.id, name: tc.name, result: await executeToolCall(tc.name, tc.input) };
-        } catch (err) {
-          return { id: tc.id, name: tc.name, result: { error: err.message } };
-        }
-      })
+    tasks.push(
+      executeFlight({ flight_number: flightNumber, airline, city, date })
+        .then(r => { results.flight = r; })
+        .catch(e => { results.flight = { error: e.message, status: "error" }; })
     );
-
-    // Build tool_result messages for the follow-up
-    const toolResultMessages = toolResults.map(tr => ({
-      type: "tool_result",
-      tool_use_id: tr.id,
-      content: JSON.stringify(tr.result)
-    }));
-
-    // Send results back for Claude to synthesize
-    try {
-      const followUp = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          system: "Respond ONLY with a JSON object (no markdown backticks). Fields: flight (object with flight_number, airline, status, scheduled_arrival, actual_arrival, delay_minutes, terminal, gate, origin_code, destination_code, origin_city, destination_city — or null if no flight lookup), fare (object with route, base_fare, toll, surcharges, total, found — or null if no fare lookup), summary (short 1-line dispatcher summary).",
-          messages: [
-            { role: "user", content: userPrompt },
-            { role: "assistant", content: data.content },
-            { role: "user", content: toolResultMessages }
-          ],
-          tools: TOOL_DEFINITIONS
-        })
-      });
-      if (followUp.ok) {
-        const followUpData = await followUp.json();
-        if (followUpData.content && Array.isArray(followUpData.content)) {
-          const finalText = followUpData.content.filter(b => b.type === "text").map(b => b.text).join("\n");
-          if (finalText) {
-            try {
-              const jsonMatch = finalText.replace(/```json|```/g, "").trim().match(/\{[\s\S]*\}/);
-              if (jsonMatch) {
-                const parsed = JSON.parse(jsonMatch[0]);
-                if (parsed.flight && parsed.flight.delay_minutes != null) parsed.flight.delay_minutes = Number(parsed.flight.delay_minutes) || 0;
-                return parsed;
-              }
-            } catch {}
-          }
-        }
-      }
-    } catch {}
-
-    // Fallback: return raw tool results directly
-    const flightResult = toolResults.find(r => r.name === "lookup_flight_status");
-    const fareResult = toolResults.find(r => r.name === "calculate_fare");
-    return {
-      flight: flightResult?.result?.error ? null : (flightResult?.result || null),
-      fare: fareResult?.result?.error ? null : (fareResult?.result || null),
-      summary: "Results retrieved (direct)"
-    };
-  } catch (err) {
-    return { flight: null, fare: null, error: "AI Assist failed: " + err.message };
   }
+
+  if (hasFareQuery) {
+    tasks.push(
+      Promise.resolve(executeFare({ pickup_location: pickup, dropoff_location: dropoff, passengers: parseInt(passengers) || 1, trip_type: tripType || "one-way" }))
+        .then(r => { results.fare = r; })
+        .catch(e => { results.fare = { error: e.message }; })
+    );
+  }
+
+  await Promise.all(tasks);
+  return results;
 }
+
 
 // ── Driver Database ──
 const DRIVERS = [
@@ -3096,30 +3015,30 @@ Rules:
               <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
                 <button
                   onClick={lookupFlightOnly}
-                  disabled={aiLoading || (!form.flightNumber && !form.airline) || isStandaloneMode()}
+                  disabled={aiLoading || (!form.flightNumber && !form.airline)}
                   style={{
                     flex: 1, padding: "10px 8px", borderRadius: 8, border: "none", fontSize: 14, fontWeight: 700,
-                    background: (!form.flightNumber && !form.airline) ? "var(--bg-2)" : "linear-gradient(135deg, #1a3a6a, #2255aa)",
-                    color: (!form.flightNumber && !form.airline) ? "var(--text-1)" : "#fff",
-                    cursor: (!form.flightNumber && !form.airline || aiLoading) ? "default" : "pointer", fontFamily: "inherit",
+                    background: (!form.flightNumber && !form.airline) ? "var(--bg-2)" : "var(--amber)",
+                    color: (!form.flightNumber && !form.airline) ? "var(--text-3)" : "#0a0a0a",
+                    cursor: (!form.flightNumber && !form.airline || aiLoading) ? "default" : "pointer", fontFamily: "var(--mono)", letterSpacing: "0.06em",
                     opacity: aiLoading ? 0.5 : 1
                   }}
                 >
-                  ✈ Check Flight
+                  {aiLoading ? "⏳ CHECKING..." : "✈ CHECK FLIGHT"}
                 </button>
                 <button
                   onClick={runAIAssistHandler}
-                  disabled={aiLoading || isStandaloneMode() || ((!form.flightNumber && !form.airline) && (!form.pickupAddress || !form.dropoffAddress))}
+                  disabled={aiLoading || ((!form.flightNumber && !form.airline) && (!form.pickupAddress || !form.dropoffAddress))}
                   style={{
                     flex: 2, padding: "10px 8px", borderRadius: 8, border: "none", fontSize: 14, fontWeight: 700,
-                    background: aiLoading ? "var(--bg-2)" : "linear-gradient(135deg, #2255aa, #3b9eff)",
-                    color: "#fff",
-                    cursor: aiLoading ? "default" : "pointer", fontFamily: "inherit",
-                    boxShadow: aiLoading ? "none" : "0 2px 12px rgba(59,158,255,0.2)",
+                    background: aiLoading ? "var(--bg-2)" : "var(--green)",
+                    color: aiLoading ? "var(--text-3)" : "#0a0a0a",
+                    cursor: aiLoading ? "default" : "pointer", fontFamily: "var(--mono)", letterSpacing: "0.06em",
+                    boxShadow: aiLoading ? "none" : "0 2px 12px rgba(76,175,106,0.2)",
                     opacity: aiLoading ? 0.5 : 1
                   }}
                 >
-                  {aiLoading ? `⏳ Searching... (${aiTimer}s)` : "✈ Check Flight + Fare"}
+                  {aiLoading ? `⏳ CHECKING... (${aiTimer}s)` : "✈ CHECK FLIGHT + FARE"}
                 </button>
               </div>
 
@@ -3139,57 +3058,67 @@ Rules:
 
               {/* Flight Data Card */}
               {flightData && !flightData.error && flightData.status !== "error" && flightData.status !== "unavailable" && (
-                <div style={{ background: "var(--bg-1)", border: "1px solid #1a2a4a", borderRadius: 10, padding: 14, marginBottom: 10 }}>
+                <div style={{ background: "var(--bg-1)", border: "1px solid var(--border-1)", borderRadius: 10, padding: 14, marginBottom: 10 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
                     <span style={{ fontSize: 18 }}>✈</span>
                     <div>
-                      <p style={{ fontSize: 16, fontWeight: 700, color: "#fff" }}>
+                      <p style={{ fontSize: 16, fontWeight: 700, color: "var(--text-1)" }}>
                         {flightData.flight_number || form.flightNumber || "Flight"}
                         {flightData.airline && <span style={{ fontWeight: 400, color: "var(--text-2)", fontSize: 14 }}> · {flightData.airline}</span>}
                       </p>
                     </div>
                     {/* Status badge */}
                     <span style={{
-                      marginLeft: "auto", padding: "3px 10px", borderRadius: 6, fontSize: 13, fontWeight: 700,
-                      background: flightData.status === "on-time" || flightData.status === "landed" ? "rgba(80,200,80,0.15)" :
-                        flightData.status === "delayed" ? "rgba(255,200,80,0.15)" :
-                        flightData.status === "cancelled" ? "rgba(255,58,48,0.15)" : "rgba(150,150,150,0.1)",
-                      color: flightData.status === "on-time" || flightData.status === "landed" ? "var(--green)" :
-                        flightData.status === "delayed" ? "var(--amber)" :
+                      marginLeft: "auto", padding: "3px 10px", borderRadius: 6, fontSize: 12, fontWeight: 700,
+                      background: flightData.status === "scheduled" || flightData.status === "landed" || flightData.status === "on-time" ? "rgba(5,150,105,0.1)" :
+                        flightData.delay_minutes > 0 ? "rgba(217,119,6,0.1)" :
+                        flightData.status === "cancelled" ? "rgba(220,38,38,0.1)" : "rgba(150,150,150,0.1)",
+                      color: flightData.status === "scheduled" || flightData.status === "landed" || flightData.status === "on-time" ? "var(--green)" :
+                        flightData.delay_minutes > 0 ? "var(--amber)" :
                         flightData.status === "cancelled" ? "var(--red)" : "var(--text-2)",
-                      border: `1px solid ${flightData.status === "on-time" || flightData.status === "landed" ? "rgba(5,150,105,0.2)" :
-                        flightData.status === "delayed" ? "rgba(217,119,6,0.2)" :
-                        flightData.status === "cancelled" ? "rgba(220,38,38,0.2)" : "var(--text-1)"}`,
-                      textTransform: "uppercase"
+                      border: `1px solid ${flightData.status === "scheduled" || flightData.status === "landed" ? "rgba(5,150,105,0.2)" : flightData.delay_minutes > 0 ? "rgba(217,119,6,0.2)" : "var(--border-0)"}`,
+                      fontFamily: "var(--mono)", letterSpacing: "0.08em", textTransform: "uppercase"
                     }}>
                       {flightData.status || "Unknown"}
                       {Number(flightData.delay_minutes) > 0 && ` +${flightData.delay_minutes}m`}
                     </span>
                   </div>
 
+                  {/* Message from AviationStack */}
+                  {flightData.message && (
+                    <div style={{ background: "rgba(240,165,0,0.06)", border: "1px solid var(--amber-border)", borderRadius: 8, padding: "8px 12px", marginBottom: 10, textAlign: "center" }}>
+                      <p style={{ fontSize: 14, fontWeight: 700, color: "var(--amber)", fontFamily: "var(--mono)" }}>
+                        ✈ {flightData.message}
+                      </p>
+                    </div>
+                  )}
+
                   <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 8, alignItems: "center", marginBottom: 8 }}>
                     <div style={{ textAlign: "center" }}>
-                      <p style={{ fontSize: 18, fontWeight: 700, color: "var(--green)" }}>{flightData.origin_code || "---"}</p>
-                      <p style={{ fontSize: 12, color: "var(--text-2)" }}>{flightData.origin_city || "Origin"}</p>
-                      {flightData.scheduled_departure && <p style={{ fontSize: 14, color: "var(--text-2)", fontWeight: 500, marginTop: 2 }}>
-                        {flightData.actual_departure ? <><s style={{color:"#7a8498"}}>{flightData.scheduled_departure}</s> <span style={{color:"var(--amber)"}}>{flightData.actual_departure}</span></> : flightData.scheduled_departure}
-                      </p>}
+                      <p style={{ fontSize: 18, fontWeight: 700, color: "var(--green)", fontFamily: "var(--mono)" }}>{flightData.origin_code || flightData.departure || "---"}</p>
+                      <p style={{ fontSize: 11, color: "var(--text-2)" }}>Origin</p>
                     </div>
-                    <div style={{ fontSize: 16, color: "#909aaa" }}>→</div>
+                    <div style={{ fontSize: 16, color: "var(--text-3)" }}>→</div>
                     <div style={{ textAlign: "center" }}>
-                      <p style={{ fontSize: 18, fontWeight: 700, color: "var(--green)" }}>{flightData.destination_code || "---"}</p>
-                      <p style={{ fontSize: 12, color: "var(--text-2)" }}>{flightData.destination_city || "Destination"}</p>
-                      {flightData.scheduled_arrival && <p style={{ fontSize: 14, color: "var(--text-2)", fontWeight: 500, marginTop: 2 }}>
-                        {flightData.actual_arrival && flightData.actual_arrival !== flightData.scheduled_arrival ? <><s style={{color:"#7a8498"}}>{flightData.scheduled_arrival}</s> <span style={{color:"var(--amber)"}}>{flightData.actual_arrival}</span></> : flightData.scheduled_arrival}
-                      </p>}
+                      <p style={{ fontSize: 18, fontWeight: 700, color: "var(--green)", fontFamily: "var(--mono)" }}>{flightData.destination_code || flightData.arrival || "---"}</p>
+                      <p style={{ fontSize: 11, color: "var(--text-2)" }}>Arrival</p>
+                      {(flightData.arrivalTime || flightData.actual_arrival || flightData.scheduled_arrival) && (
+                        <p style={{ fontSize: 14, fontWeight: 700, color: flightData.delay_minutes > 0 ? "var(--amber)" : "var(--text-1)", marginTop: 3, fontFamily: "var(--mono)" }}>
+                          {flightData.arrivalTime || flightData.actual_arrival || flightData.scheduled_arrival}
+                        </p>
+                      )}
                     </div>
                   </div>
 
-                  <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
-                    {flightData.terminal && <span style={{ fontSize: 12, color: "var(--text-2)", background: "var(--bg-2)", padding: "2px 8px", borderRadius: 4 }}>Terminal {flightData.terminal}</span>}
-                    {flightData.gate && <span style={{ fontSize: 12, color: "var(--text-2)", background: "var(--bg-2)", padding: "2px 8px", borderRadius: 4 }}>Gate {flightData.gate}</span>}
-                    {flightData.aircraft_type && <span style={{ fontSize: 12, color: "var(--text-2)", background: "var(--bg-2)", padding: "2px 8px", borderRadius: 4 }}>{flightData.aircraft_type}</span>}
-                  </div>
+                  {/* Auto-fill arrival hint */}
+                  {(flightData.arrivalTime || flightData.actual_arrival) && (
+                    <button onClick={() => {
+                      const t = flightData.arrivalTime || flightData.actual_arrival;
+                      setForm(p => ({ ...p, flightArrival: t }));
+                    }} style={{ width: "100%", padding: "6px", borderRadius: 6, border: "1px solid var(--border-0)", background: "transparent", color: "var(--green)", fontSize: 12, cursor: "pointer", fontFamily: "var(--mono)", letterSpacing: "0.06em" }}>
+                      ⚡ USE {flightData.arrivalTime || flightData.actual_arrival} AS ARRIVAL TIME
+                    </button>
+                  )}
                 </div>
               )}
 
