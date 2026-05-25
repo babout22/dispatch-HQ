@@ -1580,11 +1580,7 @@ function DispatcherApp({ session, onLogout }) {
     return { year: n.getFullYear(), month: n.getMonth() };
   });
   const [mapsApiKey, setMapsApiKey] = useState(() => loadMapsKey());
-  const [mapsReady, setMapsReady] = useState(false);
-  useEffect(() => {
-    const key = loadMapsKey();
-    if (key) setMapsReady(true);
-  }, []);
+  const [mapsReady, setMapsReady] = useState(true);
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
   const [formError, setFormError] = useState("");
   const [missingFields, setMissingFields] = useState([]);

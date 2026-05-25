@@ -1290,13 +1290,7 @@ function DispatcherApp({ session, onLogout }) {
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [calViewMonth, setCalViewMonth] = useState(() => { const n = new Date(); return { year: n.getFullYear(), month: n.getMonth() }; });
   const [mapsApiKey, setMapsApiKey] = useState(() => loadMapsKey());
-  const [mapsReady, setMapsReady] = useState(false);
-
-  // Auto-load Maps if key already stored
-  useEffect(() => {
-    const key = loadMapsKey();
-    if (key) setMapsReady(true); // proxy doesn't need SDK loaded
-  }, []);
+  const [mapsReady, setMapsReady] = useState(true); // always true — proxy handles API calls server-side
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
   const [formError, setFormError] = useState("");
   const [missingFields, setMissingFields] = useState([]); // field names that failed validation
