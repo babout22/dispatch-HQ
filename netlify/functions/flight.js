@@ -1,64 +1,23 @@
 exports.handler = async (event) => {
-  const headers = {
-    "Access-Control-Allow-Origin": "*",
-    "Content-Type": "application/json",
-  };
-
-  if (event.httpMethod === "OPTIONS") {
-    return { statusCode: 200, headers, body: "" };
-  }
-
-  const flight = (event.queryStringParameters?.flight || "").toUpperCase().replace(/\s+/g, "");
-  if (!flight) {
-    return { statusCode: 400, headers, body: JSON.stringify({ found: false, error: "flight param required" }) };
-  }
-
+  const h = { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" };
+  const flight = (event.queryStringParameters || {}).flight;
+  if (!flight) return { statusCode: 400, headers: h, body: JSON.stringify({ error: "No flight" }) };
   const key = process.env.AVIATIONSTACK_KEY;
-  if (!key) {
-    return { statusCode: 500, headers, body: JSON.stringify({ found: false, error: "Flight API key not configured" }) };
-  }
-
+  if (!key) return { statusCode: 500, headers: h, body: JSON.stringify({ error: "No key" }) };
   try {
-    const url = `http://api.aviationstack.com/v1/flights?access_key=${key}&flight_iata=${encodeURIComponent(flight)}&limit=1`;
+    const url = "http://api.aviationstack.com/v1/flights?access_key=" + key + "&flight_iata=" + flight.trim().toUpperCase() + "&limit=1";
     const resp = await fetch(url);
     const data = await resp.json();
-
-    const f = data?.data?.[0];
-    if (!f) {
-      return { statusCode: 200, headers, body: JSON.stringify({ found: false, flight }) };
-    }
-
-    const scheduled = f.arrival?.scheduled || "";
-    const actual    = f.arrival?.actual || f.arrival?.estimated || "";
-    const schDep    = f.departure?.scheduled || "";
-    const actDep    = f.departure?.actual || f.departure?.estimated || "";
-
-    const delayMin = f.arrival?.delay || 0;
-
-    const statusRaw = f.flight_status === "landed"    ? "landed"
-                    : f.flight_status === "active"    ? "active"
-                    : f.flight_status === "scheduled" ? "scheduled"
-                    : f.flight_status === "cancelled" ? "cancelled"
-                    : f.flight_status === "diverted"  ? "diverted"
-                    : "unknown";
-
-    return {
-      statusCode: 200,
-      headers,
-      body: JSON.stringify({
-        found:            true,
-        flight:           f.flight?.iata || flight,
-        airline:          f.airline?.name || "",
-        statusRaw,
-        delay:            delayMin,
-        scheduledArrival: scheduled,
-        actualArrival:    actual,
-        arrival:          f.arrival?.iata || "",
-        departure:        f.departure?.iata || "",
-        message:          "",
-      }),
-    };
-  } catch (e) {
-    return { statusCode: 502, headers, body: JSON.stringify({ found: false, error: e.message }) };
+    if (!data.data || !data.data.length) return { statusCode: 200, headers: h, body: JSON.stringify({ found: false }) };
+    const f = data.data[0];
+    const fmt = (iso) => { try { return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true }); } catch(e) { return iso || ""; } };
+    const delay = f.arrival && f.arrival.delay ? f.arrival.delay : 0;
+    const status = f.flight_status || "unknown";
+    const arr = f.arrival || {};
+    const arrivalTime = fmt(arr.actual || arr.estimated || arr.scheduled);
+    const msg = delay > 0 ? "Delayed " + delay + " min, Arrives " + arrivalTime : status === "landed" ? "Landed, Arrived " + arrivalTime : "ETA " + arrivalTime;
+    return { statusCode: 200, headers: h, body: JSON.stringify({ found: true, flight: (f.flight && f.flight.iata) || flight, airline: (f.airline && f.airline.name) || "", status: status, delay_minutes: delay, arrivalTime: arrivalTime, message: msg }) };
+  } catch(e) {
+    return { statusCode: 502, headers: h, body: JSON.stringify({ error: e.message }) };
   }
 };
