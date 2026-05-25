@@ -1,3 +1,10 @@
+const fmt = (iso) => {
+  if (!iso) return "";
+  try {
+    return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "America/New_York" });
+  } catch { return iso; }
+};
+
 exports.handler = async (event) => {
   const headers = {
     "Access-Control-Allow-Origin": "*",
@@ -28,27 +35,23 @@ exports.handler = async (event) => {
       return { statusCode: 200, headers, body: JSON.stringify({ found: false, flight }) };
     }
 
-    const statusRaw = f.flight_status === "landed"    ? "landed"
-                    : f.flight_status === "active"    ? "active"
-                    : f.flight_status === "scheduled" ? "scheduled"
-                    : f.flight_status === "cancelled" ? "cancelled"
-                    : f.flight_status === "diverted"  ? "diverted"
-                    : "unknown";
+    const delay = f.arrival?.delay || 0;
+    const status = f.flight_status || "unknown";
+    const arrivalTime = fmt(f.arrival?.actual || f.arrival?.estimated || f.arrival?.scheduled);
 
     return {
       statusCode: 200,
       headers,
       body: JSON.stringify({
-        found:            true,
-        flight:           f.flight?.iata || flight,
-        airline:          f.airline?.name || "",
-        statusRaw,
-        delay:            f.arrival?.delay || 0,
-        scheduledArrival: f.arrival?.scheduled || "",
-        actualArrival:    f.arrival?.actual || f.arrival?.estimated || "",
-        arrival:          f.arrival?.iata || "",
-        departure:        f.departure?.iata || "",
-        message:          "",
+        found: true,
+        flight: f.flight?.iata || flight,
+        airline: f.airline?.name || "",
+        status,
+        delay_minutes: delay,
+        arrivalTime,
+        message: delay > 0 ? "Delayed " + delay + " min, Arrives " + arrivalTime
+                : status === "landed" ? "Landed, Arrived " + arrivalTime
+                : "ETA " + arrivalTime,
       }),
     };
   } catch (e) {
