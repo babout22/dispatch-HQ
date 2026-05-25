@@ -92,8 +92,8 @@
     /* ── Inputs ── */
     input, select, textarea {
       font-family: var(--sans); font-size: 15px; font-weight: 400;
-      color: var(--text-1); background: var(--bg-1);
-      border: 1px solid var(--border-0); border-radius: var(--r);
+      color: #1a0a00; background: #fff; font-weight: 600;
+      border: 1px solid var(--border-1); border-radius: var(--r);
       outline: none; transition: border-color 0.15s, box-shadow 0.15s;
     }
     input:focus, select:focus {
@@ -241,6 +241,88 @@
       .pax-step-btn { min-width: 44px; min-height: 44px; display: flex; align-items: center; justify-content: center; }
       .confirm-btn { padding: 18px !important; font-size: 18px !important; border-radius: 10px !important; min-height: 58px; }
       .booking-form-mobile { padding-bottom: 20px !important; }
+    }
+
+    /* ── iPhone safe areas ── */
+    /* Approach: pad the sticky header itself with safe-area-inset-top */
+    .safe-header {
+      padding-top: env(safe-area-inset-top, 44px) !important;
+      min-height: calc(54px + env(safe-area-inset-top, 44px)) !important;
+      box-sizing: border-box !important;
+    }
+    /* Fallback for older iOS that needs explicit pixel value */
+    @media screen and (max-width: 768px) {
+      .safe-header {
+        padding-top: max(env(safe-area-inset-top), 44px) !important;
+        min-height: calc(54px + max(env(safe-area-inset-top), 44px)) !important;
+      }
+    }
+
+    /* Bottom nav — hidden by default, mobile only */
+    .bottom-nav {
+      display: none;
+    }
+    .top-nav-tabs {
+      display: flex;
+    }
+
+    @media (max-width: 768px) {
+      /* Show bottom nav, hide top tabs */
+      .bottom-nav {
+        display: flex !important;
+        position: fixed;
+        bottom: 0; left: 0; right: 0;
+        height: calc(44px + env(safe-area-inset-bottom));
+        padding-bottom: env(safe-area-inset-bottom);
+        background: rgba(6,14,6,0.98);
+        backdrop-filter: blur(24px);
+        -webkit-backdrop-filter: blur(24px);
+        border-top: 1px solid #1a3a1c;
+        z-index: 300;
+        align-items: stretch;
+        justify-content: space-around;
+      }
+      .bottom-nav-btn {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: none;
+        background: transparent;
+        color: #3a5a3c;
+        cursor: pointer;
+        transition: color 0.12s, background 0.12s;
+        padding: 0;
+        border-top: 2px solid transparent;
+        -webkit-tap-highlight-color: transparent;
+      }
+      .bottom-nav-btn.active {
+        color: #f0a500;
+        border-top-color: #f0a500;
+        background: rgba(240,165,0,0.05);
+      }
+      .bottom-nav-btn .nav-icon {
+        font-size: 22px;
+        line-height: 1;
+      }
+      .bottom-nav-btn span {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.1em;
+        font-family: 'JetBrains Mono', monospace;
+      }
+      .top-nav-tabs {
+        display: none !important;
+      }
+      /* Push main content above bottom nav */
+      .safe-main {
+        padding-bottom: calc(52px + env(safe-area-inset-bottom)) !important;
+      }
+      /* Header compact on mobile */
+      .safe-header {
+        padding-left: 12px !important;
+        padding-right: 12px !important;
+      }
     }
 
     @media (prefers-reduced-motion: reduce) {
