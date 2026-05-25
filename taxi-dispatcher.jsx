@@ -682,23 +682,14 @@ async function executeFlight(input) {
       return { error: "Flight not found", status: "unknown", flight_number: fn };
     }
 
-    // Normalize to existing app format
     return {
-      flight_number:      data.flight,
-      airline:            data.airline,
-      status:             data.statusRaw === "landed"    ? "landed"
-                        : data.statusRaw === "active"    ? "in-air"
-                        : data.statusRaw === "scheduled" ? "scheduled"
-                        : data.statusRaw === "cancelled" ? "cancelled"
-                        : data.statusRaw === "diverted"  ? "diverted"
-                        : "unknown",
-      delay_minutes:      data.delay || 0,
-      scheduled_arrival:  data.scheduledArrival || "",
-      actual_arrival:     data.actualArrival || "",
-      destination_code:   data.arrival || "",
-      origin_code:        data.departure || "",
-      message:            data.message || "",
-      found:              true,
+      flight_number:  data.flight,
+      airline:        data.airline,
+      status:         data.status === "active" ? "in-air" : (data.status || "unknown"),
+      delay_minutes:  data.delay_minutes || 0,
+      actual_arrival: data.arrivalTime || "",
+      message:        data.message || "",
+      found:          true,
     };
   } catch (err) {
     return { error: "Flight lookup failed: " + err.message, status: "error" };
