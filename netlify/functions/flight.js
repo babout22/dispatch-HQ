@@ -3,7 +3,8 @@ exports.handler = async (event) => {
   const flight = (event.queryStringParameters || {}).flight;
   if (!flight) return { statusCode: 400, headers: h, body: JSON.stringify({ error: "No flight" }) };
   const key = process.env.AVIATIONSTACK_KEY;
-  if (!key) return { statusCode: 500, headers: h, body: JSON.stringify({ error: "No key" }) };
+  console.log("AVIATIONSTACK_KEY present:", !!key, "length:", key ? key.length : 0);
+  if (!key) return { statusCode: 500, headers: h, body: JSON.stringify({ error: "No key", env_keys: Object.keys(process.env).filter(k => k.includes('AVIATION') || k.includes('aviation')) }) };
   try {
     const url = "http://api.aviationstack.com/v1/flights?access_key=" + key + "&flight_iata=" + flight.trim().toUpperCase() + "&limit=1";
     const resp = await fetch(url);
