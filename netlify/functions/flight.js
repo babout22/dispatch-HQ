@@ -28,6 +28,13 @@ exports.handler = async (event) => {
       return { statusCode: 200, headers, body: JSON.stringify({ found: false, flight }) };
     }
 
+    const scheduled = f.arrival?.scheduled || "";
+    const actual    = f.arrival?.actual || f.arrival?.estimated || "";
+    const schDep    = f.departure?.scheduled || "";
+    const actDep    = f.departure?.actual || f.departure?.estimated || "";
+
+    const delayMin = f.arrival?.delay || 0;
+
     const statusRaw = f.flight_status === "landed"    ? "landed"
                     : f.flight_status === "active"    ? "active"
                     : f.flight_status === "scheduled" ? "scheduled"
@@ -43,15 +50,15 @@ exports.handler = async (event) => {
         flight:           f.flight?.iata || flight,
         airline:          f.airline?.name || "",
         statusRaw,
-        delay:            f.arrival?.delay || 0,
-        scheduledArrival: f.arrival?.scheduled || "",
-        actualArrival:    f.arrival?.actual || f.arrival?.estimated || "",
+        delay:            delayMin,
+        scheduledArrival: scheduled,
+        actualArrival:    actual,
         arrival:          f.arrival?.iata || "",
         departure:        f.departure?.iata || "",
         message:          "",
       }),
     };
   } catch (e) {
-    return { statusCode: 502, headers, body: JSON.stringify({ error: e.message }) };
+    return { statusCode: 502, headers, body: JSON.stringify({ found: false, error: e.message }) };
   }
 };
