@@ -2634,6 +2634,14 @@ Rules:
     const do_ = normalizeLocation(form.dropoffAddress);
     return AIRPORT_CODES.includes(pu) || AIRPORT_CODES.includes(do_);
   }, [form.pickupAddress, form.dropoffAddress]);
+  const isArrivalTrip = useMemo(() => {
+    const AIRPORT_CODES = ["JFK", "LGA", "EWR"];
+    return AIRPORT_CODES.includes(normalizeLocation(form.pickupAddress));
+  }, [form.pickupAddress]);
+  const isDepartureTrip = useMemo(() => {
+    const AIRPORT_CODES = ["JFK", "LGA", "EWR"];
+    return AIRPORT_CODES.includes(normalizeLocation(form.dropoffAddress));
+  }, [form.dropoffAddress]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const handleSubmit = () => {
     if (isSubmitting) return;
@@ -2646,8 +2654,8 @@ Rules:
       { key: "dropoffAddress", label: "Dropoff Address", required: true, empty: !form.dropoffAddress.trim() },
       { key: "date", label: "Date", required: true, empty: !form.date },
       { key: "timeSlot", label: "Fleet Assignment", required: true, empty: !form.timeSlot && !form.customTime },
-      { key: "airline", label: "Airline", required: isAirportTrip, empty: isAirportTrip && !form.airline.trim() },
-      { key: "flightNumber", label: "Flight #", required: isAirportTrip, empty: isAirportTrip && !form.flightNumber.trim() },
+      { key: "airline", label: "Airline", required: isArrivalTrip, empty: isArrivalTrip && !form.airline.trim() },
+      { key: "flightNumber", label: "Flight #", required: isArrivalTrip, empty: isArrivalTrip && !form.flightNumber.trim() },
       { key: "driverNumber", label: "Driver", required: true, empty: !form.driverNumber },
       { key: "paymentAmount", label: "Payment", required: true, empty: !form.paymentAmount.trim() || parseFloat(form.paymentAmount) === 0 }
     ];
@@ -3144,7 +3152,7 @@ Rules:
     const puNorm = normalizeLocation(form.pickupAddress);
     const airport = ["JFK", "LGA", "EWR"].includes(norm) || ["JFK", "LGA", "EWR"].includes(puNorm);
     setForm((p) => ({ ...p, dropoffAddress: v, ...!airport && { airline: "", flightNumber: "" } }));
-  }, highlight: missingFields.includes("dropoffAddress"), mapsReady, speechLang }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { ...labelStyle, color: !isAirportTrip ? "#3a3d46" : missingFields.includes("airline") ? "var(--red)" : labelStyle.color } }, "Airline", isAirportTrip && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--red)" } }, " *"), !isAirportTrip && /* @__PURE__ */ React.createElement("span", { style: { color: "#3a3d46", fontWeight: 400, marginLeft: 6 } }, "(airport only)")), /* @__PURE__ */ React.createElement(
+  }, highlight: missingFields.includes("dropoffAddress"), mapsReady, speechLang }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { ...labelStyle, color: !isAirportTrip ? "#3a3d46" : missingFields.includes("airline") ? "var(--red)" : labelStyle.color } }, "Airline", isArrivalTrip && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--red)" } }, " *"), !isAirportTrip && /* @__PURE__ */ React.createElement("span", { style: { color: "#3a3d46", fontWeight: 400, marginLeft: 6 } }, "(arrival only)"), isDepartureTrip && !isArrivalTrip && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-3)", fontWeight: 400, marginLeft: 6 } }, "(not required)")), /* @__PURE__ */ React.createElement(
     "input",
     {
       type: "text",
@@ -3153,16 +3161,16 @@ Rules:
         if (isAirportTrip) setForm((p) => ({ ...p, airline: e.target.value }));
       },
       disabled: !isAirportTrip,
-      placeholder: isAirportTrip ? "e.g. Korean Air" : "\u2014",
+      placeholder: isArrivalTrip ? "e.g. Korean Air" : isDepartureTrip ? "(departure \u2014 optional)" : "\u2014",
       style: {
         ...inputStyle,
         opacity: isAirportTrip ? 1 : 0.25,
         cursor: isAirportTrip ? "text" : "not-allowed",
-        border: isAirportTrip && missingFields.includes("airline") ? "1.5px solid #ff3a30" : inputStyle.border,
+        border: isArrivalTrip && missingFields.includes("airline") ? "1.5px solid #ff3a30" : inputStyle.border,
         boxShadow: isAirportTrip && missingFields.includes("airline") ? "0 0 0 1px rgba(220,38,38,0.15)" : "none"
       }
     }
-  )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { ...labelStyle, color: !isAirportTrip ? "#3a3d46" : missingFields.includes("flightNumber") ? "var(--red)" : labelStyle.color } }, "Flight #", isAirportTrip && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--red)" } }, " *"), !isAirportTrip && /* @__PURE__ */ React.createElement("span", { style: { color: "#3a3d46", fontWeight: 400, marginLeft: 6 } }, "(airport only)")), /* @__PURE__ */ React.createElement(
+  )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { ...labelStyle, color: !isAirportTrip ? "#3a3d46" : missingFields.includes("flightNumber") ? "var(--red)" : labelStyle.color } }, "Flight #", isArrivalTrip && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--red)" } }, " *"), !isAirportTrip && /* @__PURE__ */ React.createElement("span", { style: { color: "#3a3d46", fontWeight: 400, marginLeft: 6 } }, "(arrival only)"), isDepartureTrip && !isArrivalTrip && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-3)", fontWeight: 400, marginLeft: 6 } }, "(not required)")), /* @__PURE__ */ React.createElement(
     "input",
     {
       type: "text",
@@ -3177,7 +3185,7 @@ Rules:
         ...inputStyle,
         opacity: isAirportTrip ? 1 : 0.25,
         cursor: isAirportTrip ? "text" : "not-allowed",
-        border: isAirportTrip && missingFields.includes("flightNumber") ? "1.5px solid #ff3a30" : inputStyle.border,
+        border: isArrivalTrip && missingFields.includes("flightNumber") ? "1.5px solid #ff3a30" : inputStyle.border,
         boxShadow: isAirportTrip && missingFields.includes("flightNumber") ? "0 0 0 1px rgba(220,38,38,0.15)" : "none"
       }
     }

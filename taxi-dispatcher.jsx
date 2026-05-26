@@ -2389,6 +2389,18 @@ Rules:
     return AIRPORT_CODES.includes(pu) || AIRPORT_CODES.includes(do_);
   }, [form.pickupAddress, form.dropoffAddress]);
 
+  // Arrival: pickup=airport → customer is ARRIVING → need airline + flight
+  const isArrivalTrip = useMemo(() => {
+    const AIRPORT_CODES = ["JFK", "LGA", "EWR"];
+    return AIRPORT_CODES.includes(normalizeLocation(form.pickupAddress));
+  }, [form.pickupAddress]);
+
+  // Departure: dropoff=airport → customer is DEPARTING → no airline/flight needed
+  const isDepartureTrip = useMemo(() => {
+    const AIRPORT_CODES = ["JFK", "LGA", "EWR"];
+    return AIRPORT_CODES.includes(normalizeLocation(form.dropoffAddress));
+  }, [form.dropoffAddress]);
+
   const [isSubmitting, setIsSubmitting] = useState(false);
   const handleSubmit = () => {
     if (isSubmitting) return;
@@ -2403,8 +2415,8 @@ Rules:
       { key: "dropoffAddress", label: "Dropoff Address", required: true, empty: !form.dropoffAddress.trim() },
       { key: "date", label: "Date", required: true, empty: !form.date },
       { key: "timeSlot", label: "Fleet Assignment", required: true, empty: !form.timeSlot && !form.customTime },
-      { key: "airline", label: "Airline", required: isAirportTrip, empty: isAirportTrip && !form.airline.trim() },
-      { key: "flightNumber", label: "Flight #", required: isAirportTrip, empty: isAirportTrip && !form.flightNumber.trim() },
+      { key: "airline", label: "Airline", required: isArrivalTrip, empty: isArrivalTrip && !form.airline.trim() },
+      { key: "flightNumber", label: "Flight #", required: isArrivalTrip, empty: isArrivalTrip && !form.flightNumber.trim() },
       { key: "driverNumber", label: "Driver", required: true, empty: !form.driverNumber },
       { key: "paymentAmount", label: "Payment", required: true, empty: !form.paymentAmount.trim() || parseFloat(form.paymentAmount) === 0 },
     ];
@@ -3003,27 +3015,29 @@ Rules:
                 {/* Airline & Flight — only required/active for airport trips */}
                 <div>
                   <label style={{...labelStyle, color: !isAirportTrip ? "#3a3d46" : missingFields.includes("airline") ? "var(--red)" : labelStyle.color}}>
-                    Airline{isAirportTrip && <span style={{ color: "var(--red)" }}> *</span>}
-                    {!isAirportTrip && <span style={{ color: "#3a3d46", fontWeight: 400, marginLeft: 6 }}>(airport only)</span>}
+                    Airline{isArrivalTrip && <span style={{ color: "var(--red)" }}> *</span>}
+                    {!isAirportTrip && <span style={{ color: "#3a3d46", fontWeight: 400, marginLeft: 6 }}>(arrival only)</span>}
+                    {isDepartureTrip && !isArrivalTrip && <span style={{ color: "var(--text-3)", fontWeight: 400, marginLeft: 6 }}>(not required)</span>}
                   </label>
                   <input
                     type="text" value={form.airline}
                     onChange={e => { if (isAirportTrip) setForm(p=>({...p,airline:e.target.value})); }}
                     disabled={!isAirportTrip}
-                    placeholder={isAirportTrip ? "e.g. Korean Air" : "—"}
+                    placeholder={isArrivalTrip ? "e.g. Korean Air" : isDepartureTrip ? "(departure — optional)" : "—"}
                     style={{
                       ...inputStyle,
                       opacity: isAirportTrip ? 1 : 0.25,
                       cursor: isAirportTrip ? "text" : "not-allowed",
-                      border: isAirportTrip && missingFields.includes("airline") ? "1.5px solid #ff3a30" : inputStyle.border,
+                      border: isArrivalTrip && missingFields.includes("airline") ? "1.5px solid #ff3a30" : inputStyle.border,
                       boxShadow: isAirportTrip && missingFields.includes("airline") ? "0 0 0 1px rgba(220,38,38,0.15)" : "none",
                     }}
                   />
                 </div>
                 <div>
                   <label style={{...labelStyle, color: !isAirportTrip ? "#3a3d46" : missingFields.includes("flightNumber") ? "var(--red)" : labelStyle.color}}>
-                    Flight #{isAirportTrip && <span style={{ color: "var(--red)" }}> *</span>}
-                    {!isAirportTrip && <span style={{ color: "#3a3d46", fontWeight: 400, marginLeft: 6 }}>(airport only)</span>}
+                    Flight #{isArrivalTrip && <span style={{ color: "var(--red)" }}> *</span>}
+                    {!isAirportTrip && <span style={{ color: "#3a3d46", fontWeight: 400, marginLeft: 6 }}>(arrival only)</span>}
+                    {isDepartureTrip && !isArrivalTrip && <span style={{ color: "var(--text-3)", fontWeight: 400, marginLeft: 6 }}>(not required)</span>}
                   </label>
                   <input
                     type="text" value={form.flightNumber}
@@ -3034,7 +3048,7 @@ Rules:
                       ...inputStyle,
                       opacity: isAirportTrip ? 1 : 0.25,
                       cursor: isAirportTrip ? "text" : "not-allowed",
-                      border: isAirportTrip && missingFields.includes("flightNumber") ? "1.5px solid #ff3a30" : inputStyle.border,
+                      border: isArrivalTrip && missingFields.includes("flightNumber") ? "1.5px solid #ff3a30" : inputStyle.border,
                       boxShadow: isAirportTrip && missingFields.includes("flightNumber") ? "0 0 0 1px rgba(220,38,38,0.15)" : "none",
                     }}
                   />
