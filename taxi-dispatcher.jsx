@@ -307,7 +307,7 @@ const TOWN_PRICES = {
   "fairlawn": { NJ: 30, MHT: 50, LGA: 75, EWR: 65, JFK: 95 },
   "fair view": { NJ: 15, MHT: 40, LGA: 60, EWR: 50, JFK: 80 },
   "fairview": { NJ: 15, MHT: 40, LGA: 60, EWR: 50, JFK: 80 },
-  "fort lee": { NJ: 10, MHT: 50, LGA: 50, EWR: 40, JFK: 70 },
+  "fort lee": { NJ: 10, MHT: 50, LGA: 50, EWR: 40, JFK: 70, Flushing: 60 },
   "franklin lakes": { NJ: 55, MHT: 80, LGA: 80, EWR: 70, JFK: 110 },
   "freehold": { NJ: 100, MHT: 105, LGA: 130, EWR: 120, JFK: 150 },
   "garfield": { NJ: 35, MHT: 45, LGA: 65, EWR: 55, JFK: 95 },
@@ -487,41 +487,81 @@ function normalizeTown(str) {
   return str.toLowerCase().trim().replace(/\s+/g, " ").replace(/[.,#]/g, "");
 }
 
-// Main fare calculator — replaces lookupFlatRate
+// Main fare calculator
 function lookupFlatRate(pickup, dropoff) {
   const pAnchor = getAnchorCode(pickup);
   const dAnchor = getAnchorCode(dropoff);
   const anchor = pAnchor || dAnchor;
-  if (!anchor) return null;
 
-  const townStr = normalizeTown(pAnchor ? dropoff : pickup);
+  // ── Airport route: one side is an airport ──
+  if (anchor) {
+    const townStr = normalizeTown(pAnchor ? dropoff : pickup);
+    const match = Object.keys(TOWN_PRICES)
+      .sort((a, b) => b.length - a.length)
+      .find(town => townStr.includes(town));
+    if (!match) return null;
+    const prices = TOWN_PRICES[match];
+    const base = prices[anchor];
+    if (!base) return null;
+    let fare = base;
+    let breakdown = match + " → " + anchor;
+    if (anchor === "EWR") {
+      const isNJ = "NJ" in prices;
+      fare += isNJ ? 14 : 54;
+      breakdown += isNJ ? " +$14 toll" : " +$54 tolls";
+    }
+    return { fare, route: pickup + " → " + dropoff, breakdown };
+  }
 
-  // Sort by length descending to match most specific first
-  const match = Object.keys(TOWN_PRICES)
-    .sort((a, b) => b.length - a.length)
-    .find(town => townStr.includes(town));
+  // ── Non-airport route: town → town ──
+  // Detect destination type from dropoff
+  const doLower = normalizeTown(dropoff);
+  const puLower = normalizeTown(pickup);
 
-  if (!match) return null;
-  const prices = TOWN_PRICES[match];
-  const base = prices[anchor];
-  if (!base) return null;
+  // Determine destination column
+  let destCol = null;
+  if (doLower.includes("manhattan") || doLower.includes("midtown") || doLower.includes("downtown") || doLower.includes("new york city") || doLower.includes("nyc") || doLower.includes("times square") || doLower.includes("penn station") || doLower.includes("grand central") || doLower.includes("upper east") || doLower.includes("upper west") || doLower.includes("tribeca") || doLower.includes("soho") || doLower.includes("chelsea")) destCol = "MHT";
+  else if (doLower.includes("flushing")) destCol = "Flushing";
+  else if (doLower.includes("queens") || doLower.includes("bayside") || doLower.includes("fresh meadows") || doLower.includes("jamaica") || doLower.includes("forest hills") || doLower.includes("astoria") || doLower.includes("corona") || doLower.includes("elmhurst") || doLower.includes("woodside") || doLower.includes("jackson heights") || doLower.includes("rego park")) destCol = "LGA";
+  else if (doLower.includes("brooklyn") || doLower.includes("bronx") || doLower.includes("staten island")) destCol = "JFK";
 
-  let fare = base;
-  let breakdown = match + " → " + anchor;
-
-  // EWR surcharge
-  if (anchor === "EWR") {
-    const isNJ = "NJ" in prices;
-    if (isNJ) {
-      fare += 14;
-      breakdown += " +$14 toll";
-    } else {
-      fare += 54; // $45 toll + $9 congestion
-      breakdown += " +$54 tolls";
+  if (destCol) {
+    // Pickup is a town
+    const match = Object.keys(TOWN_PRICES)
+      .sort((a, b) => b.length - a.length)
+      .find(town => puLower.includes(town));
+    if (match && TOWN_PRICES[match][destCol]) {
+      const fare = TOWN_PRICES[match][destCol];
+      return { fare, route: pickup + " → " + dropoff, breakdown: match + " → " + destCol };
     }
   }
 
-  return { fare, route: pickup + " → " + dropoff, breakdown };
+  // Try reverse — dropoff is the town, pickup is a destination type
+  const puDest = (() => {
+    if (puLower.includes("manhattan") || puLower.includes("midtown") || puLower.includes("nyc")) return "MHT";
+    if (puLower.includes("flushing")) return "Flushing";
+    if (puLower.includes("queens") || puLower.includes("bayside")) return "LGA";
+    return null;
+  })();
+  if (puDest) {
+    const match = Object.keys(TOWN_PRICES)
+      .sort((a, b) => b.length - a.length)
+      .find(town => doLower.includes(town));
+    if (match && TOWN_PRICES[match][puDest]) {
+      const fare = TOWN_PRICES[match][puDest];
+      return { fare, route: pickup + " → " + dropoff, breakdown: match + " → " + puDest };
+    }
+  }
+
+  // NJ town → NJ town (use NJ column)
+  const puMatch = Object.keys(TOWN_PRICES).sort((a,b)=>b.length-a.length).find(t => puLower.includes(t) && "NJ" in TOWN_PRICES[t]);
+  const doMatch = Object.keys(TOWN_PRICES).sort((a,b)=>b.length-a.length).find(t => doLower.includes(t) && "NJ" in TOWN_PRICES[t]);
+  if (puMatch && doMatch && puMatch !== doMatch) {
+    const fare = Math.round((TOWN_PRICES[puMatch].NJ + TOWN_PRICES[doMatch].NJ) / 2 + 15);
+    return { fare, route: pickup + " → " + dropoff, breakdown: puMatch + " ↔ " + doMatch };
+  }
+
+  return null;
 }
 
 
@@ -1158,42 +1198,97 @@ const BackupService = {
 function TimePickerDropdown({ selected, onSelect, allSlots }) {
   const PINNED = ["5:00 AM","6:00 AM","7:00 AM","8:00 AM","6:00 PM","10:00 PM"];
   const [q, setQ] = useState("");
+  const [showGrid, setShowGrid] = useState(false);
 
-  const matched = q ? allSlots.filter(slot => {
-    const [time] = slot.split(" ");
-    const [h, m] = time.split(":");
-    const flat = h + m;
-    const pad = h.padStart(2,"0") + m;
-    return flat.startsWith(q) || pad.startsWith(q) || h === q;
-  }).slice(0, 5) : [];
+  function parseTypedTime(input) {
+    const s = input.trim().toUpperCase().replace(/\./g,":").replace(/\s+/g," ");
+    const isPM = s.includes("PM"), isAM = s.includes("AM");
+    const clean = s.replace(/AM|PM/g,"").trim();
+    const digits = clean.replace(/[^0-9:]/g,"");
+    let h, m;
+    if (digits.includes(":")) { [h,m] = digits.split(":").map(Number); }
+    else if (digits.length<=2) { h=parseInt(digits); m=0; }
+    else if (digits.length===3) { h=parseInt(digits[0]); m=parseInt(digits.slice(1)); }
+    else if (digits.length===4) { h=parseInt(digits.slice(0,2)); m=parseInt(digits.slice(2)); }
+    else return null;
+    if (isNaN(h)||isNaN(m)||m>59||h>23) return null;
+    let period = isPM?"PM":isAM?"AM":h>=12?"PM":"AM";
+    if (h===0) h=12;
+    if (h>12) { h=h-12; period="PM"; }
+    return `${h}:${String(m).padStart(2,"0")} ${period}`;
+  }
+
+  const parsed = q.length >= 1 ? parseTypedTime(q) : null;
+  const hasAmPm = q.toUpperCase().includes("AM") || q.toUpperCase().includes("PM");
+
+  // Build dropdown suggestions — AM + PM options for ambiguous input
+  const suggestions = [];
+  if (q.length >= 1) {
+    if (!hasAmPm && parsed) {
+      const amVer = parseTypedTime(q + " am");
+      const pmVer = parseTypedTime(q + " pm");
+      if (amVer) suggestions.push({ label: amVer, badge: "AM" });
+      if (pmVer && pmVer !== amVer) suggestions.push({ label: pmVer, badge: "PM" });
+    } else if (parsed) {
+      suggestions.push({ label: parsed, badge: "CUSTOM" });
+    }
+    // Also add matching preset slots
+    allSlots.filter(slot => {
+      const [time] = slot.split(" ");
+      const [h, m] = time.split(":");
+      return (h+m).startsWith(q) || (h.padStart(2,"0")+m).startsWith(q) || h === q;
+    }).slice(0, 3).forEach(t => {
+      if (!suggestions.find(s => s.label === t)) suggestions.push({ label: t, badge: null });
+    });
+  }
 
   return (
     <div data-picker style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 200, background: "var(--bg-1)", border: "1px solid var(--border-1)", borderRadius: 12, boxShadow: "0 8px 32px rgba(0,0,0,0.5)", width: 260, padding: 10 }}>
-      {/* Smart search */}
+
+      {/* ── Free-form input — DEFAULT, always at top ── */}
+      <p style={{ fontSize: 9, color: "var(--green)", fontFamily: "var(--mono)", letterSpacing: "0.16em", marginBottom: 5 }}>ENTER TIME</p>
       <input
         autoFocus
-        type="number"
         value={q}
         onChange={e => setQ(e.target.value)}
-        placeholder="Type: 7, 730, 6, 1200..."
-        style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid var(--amber)", background: "#fff", color: "#1a0a00", fontSize: 14, fontWeight: 700, fontFamily: "var(--mono)", outline: "none", marginBottom: 8, boxSizing: "border-box" }}
+        placeholder="e.g. 10:45 am · 11:42 pm · 730"
+        style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "2px solid var(--amber)", background: "#fff", color: "#1a0a00", fontSize: 15, fontWeight: 700, fontFamily: "var(--mono)", outline: "none", marginBottom: suggestions.length ? 0 : 8, boxSizing: "border-box" }}
       />
-      {/* Search results */}
-      {q && matched.length > 0 && (
-        <div style={{ marginBottom: 8, borderRadius: 6, overflow: "hidden", border: "1px solid var(--border-0)" }}>
-          {matched.map(t => (
-            <button key={t} onClick={() => onSelect(t)} style={{ width: "100%", padding: "10px 12px", border: "none", borderBottom: "1px solid var(--border-0)", background: selected === t ? "rgba(240,165,0,0.1)" : "#fff", color: "#1a0a00", fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "var(--mono)", textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span>{t}</span>
-              {selected === t && <span style={{ color: "var(--amber)" }}>✓</span>}
+
+      {/* ── Popup suggestions — AM/PM options + slot matches ── */}
+      {suggestions.length > 0 && (
+        <div style={{ borderRadius: 6, overflow: "hidden", border: "1px solid var(--border-1)", marginBottom: 8, marginTop: 4 }}>
+          {suggestions.map((s, i) => (
+            <button key={s.label} onClick={() => onSelect(s.label)} style={{
+              width: "100%", padding: "11px 14px",
+              border: "none", borderBottom: i < suggestions.length - 1 ? "1px solid var(--border-0)" : "none",
+              background: selected === s.label ? "rgba(240,165,0,0.1)" : i === 0 ? "#fffdf5" : "#fff",
+              color: "#1a0a00", fontSize: 15, fontWeight: 700,
+              cursor: "pointer", fontFamily: "var(--mono)",
+              textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center"
+            }}>
+              <span>{s.label}</span>
+              <span style={{
+                fontSize: 10, letterSpacing: "0.1em", padding: "2px 7px", borderRadius: 4, fontWeight: 700,
+                background: s.badge === "AM" ? "rgba(76,175,106,0.15)" : s.badge === "PM" ? "rgba(240,165,0,0.15)" : s.badge === "CUSTOM" ? "rgba(240,165,0,0.15)" : "rgba(76,175,106,0.08)",
+                color: s.badge === "AM" ? "var(--green)" : s.badge === "PM" ? "var(--amber)" : s.badge === "CUSTOM" ? "var(--amber)" : "var(--text-3)",
+              }}>{s.badge || "SLOT"}</span>
             </button>
           ))}
         </div>
       )}
-      {q && matched.length === 0 && (
-        <p style={{ fontSize: 11, color: "var(--text-3)", fontFamily: "var(--mono)", textAlign: "center", marginBottom: 8 }}>No match — try 5, 7, 730, 1200</p>
-      )}
-      {/* Pinned + full grid when not searching */}
-      {!q && (
+
+      {/* Divider + toggle for pinned/grid */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "4px 0 8px" }}>
+        <div style={{ flex: 1, height: 1, background: "var(--border-0)" }} />
+        <button onClick={() => setShowGrid(v => !v)} style={{ fontSize: 9, color: "var(--green)", fontFamily: "var(--mono)", letterSpacing: "0.14em", background: "transparent", border: "none", cursor: "pointer", padding: "2px 6px" }}>
+          {showGrid ? "▲ HIDE GRID" : "▼ SHOW GRID"}
+        </button>
+        <div style={{ flex: 1, height: 1, background: "var(--border-0)" }} />
+      </div>
+
+      {/* Pinned + full grid — collapsed by default */}
+      {showGrid && (
         <>
           <p style={{ fontSize: 9, color: "var(--green)", fontFamily: "var(--mono)", letterSpacing: "0.16em", marginBottom: 6 }}>COMMON TIMES</p>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 5, marginBottom: 8 }}>
