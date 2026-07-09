@@ -343,8 +343,8 @@
   <div id="root"></div>
 
   <!-- React 18 + ReactDOM — primary: unpkg, fallback: jsdelivr, fallback: cdnjs -->
-  <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" integrity="sha384-tMH8h3BGESGckSAVGZ82T9n90ztNXxvdwvdM6UoR56cYcf+0iGXBliJ29D+wZ/x8" crossorigin="anonymous" crossorigin="anonymous"></script>
-  <script src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js" integrity="sha384-bm7MnzvK++ykSwVJ2tynSE5TRdN+xL418osEVF2DE/L/gfWHj91J2Sphe582B1Bh" crossorigin="anonymous" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" integrity="sha384-tMH8h3BGESGckSAVGZ82T9n90ztNXxvdwvdM6UoR56cYcf+0iGXBliJ29D+wZ/x8" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js" integrity="sha384-bm7MnzvK++ykSwVJ2tynSE5TRdN+xL418osEVF2DE/L/gfWHj91J2Sphe582B1Bh" crossorigin="anonymous"></script>
   <script>
     // If unpkg failed (no React), load from jsdelivr synchronously
     if (typeof React === "undefined") {
@@ -1463,7 +1463,6 @@ function normalizeLocation(text) {
   if (/\bwestchester\b|\bwhite\s*plains\b|\byonkers\b|\bnew\s*rochelle\b|\btarrytown\b/.test(t)) return "Westchester";
   return t;
 }
-async;
 function executeFare(input) {
   const result = lookupFlatRate(input.pickup_location, input.dropoff_location);
   if (!result) {
@@ -5652,8 +5651,14 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       try {
         runDispatchApp();
       } catch(e) {
-          document.getElementById("splash").style.display = "none";
-        document.getElementById("load-error").style.display = "flex";
+        // App crashed at startup — this is NOT a React-CDN failure. Log it
+        // loudly and say so, instead of swallowing it and blaming the CDN.
+        console.error("Dispatch HQ crashed during startup:", e);
+        document.getElementById("splash").style.display = "none";
+        var le = document.getElementById("load-error");
+        le.querySelector("h2").textContent = "App failed to start";
+        le.querySelector("p").textContent = "React loaded fine, but the app hit an error while starting: " + (e && e.message ? e.message : e) + " — press F12 → Console for details.";
+        le.style.display = "flex";
       }
       return;
     }
