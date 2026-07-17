@@ -4950,9 +4950,20 @@ function LoginPage({ endpointUrl: initialEndpointUrl, onLogin, onSaveEndpoint })
   const FACEID_KEY = "dispatch-hq-faceid-cred";
   const FACEID_USER_KEY = "dispatch-hq-faceid-user";
   const FACEID_SESSION_KEY = "dispatch-hq-faceid-session";
+  const isMobileDevice = () => {
+    const ua = navigator.userAgent || "";
+    if (/iPhone|iPod|Android/i.test(ua)) return true;
+    if (/iPad/i.test(ua)) return true;
+    if (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1) return true;
+    return false;
+  };
   ue(() => {
     const saved = localStorage.getItem(FACEID_USER_KEY);
     if (saved) setFaceIdUser(saved);
+    if (!isMobileDevice()) {
+      setFaceIdAvail(false);
+      return;
+    }
     if (window.PublicKeyCredential) {
       window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable().then((ok) => {
         setFaceIdAvail(ok);
