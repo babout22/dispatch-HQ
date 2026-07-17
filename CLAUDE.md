@@ -1,169 +1,170 @@
-# CLAUDE.md — Dispatch HQ
-
-Bilingual (English/Korean) taxi dispatch booking PWA for NYC.
-Read this file before touching any code in this project.
-
+---
+name: dispatch-hq-dev
+description: >
+  Development workflow for Dispatch HQ — a bilingual (English/Korean) taxi dispatch
+  booking PWA for NYC. Use whenever the user asks to build, edit, fix, add a feature,
+  compile, deploy, or test Dispatch HQ. Triggers on: "update the app", "fix this bug",
+  "change the driver logic", "update the GAS backend", "run QA", or any mention of
+  taxi-dispatcher.jsx, dispatch-hq.html, or google-apps-script.js.
+  After EVERY change: run the QA gate (Section 3). Never skip QA.
+  Project FACTS (drivers, pricebook, data shapes, storage keys, GAS contract) live in
+  CLAUDE.md — read it before editing code; do not duplicate facts into this skill.
 ---
 
-## REPO MAP
+# Dispatch HQ — Development Workflow
 
-```
-dispatch-hq/
-├── taxi-dispatcher.jsx          ← SOURCE (5,283 lines) — EDIT THIS
-├── dispatch-hq.html             ← PRODUCTION BUILD — NEVER hand-edit, always regenerate
-├── google-apps-script.js        ← GAS backend — paste into Apps Script (gitignored)
-├── _headers                     ← Netlify security headers (COOP/COEP/CSP)
-├── netlify.toml                 ← publish = ".", catch-all redirect
-├── .github/workflows/deploy.yml ← GitHub Actions auto-deploy
-├── CLAUDE.md                    ← This file
-```
+This file is the HOW. CLAUDE.md (repo root) is the WHAT — all project facts live
+there and only there. If this file and CLAUDE.md disagree, CLAUDE.md wins on facts,
+this file wins on process.
 
-### Key Source Locations
+## 1. WORKFLOW
 
-```
-L 278  const TOWN_PRICES = { ... }     // 130+ town pricebook (replaces FLAT_RATES)
-L 495  function lookupFlatRate()
-L 621  function executeFare()          // surcharges: EWR +$14/$54, pax x1.5/x2, RT x2
-L 838  const DRIVERS = [ ... ]         // 22 real drivers, 3-digit IDs
-L1255  function DispatcherApp()
-L1257  const [priceCheckMode]          // price check mode state
-L1301  const [customDrivers]           // driver management (NOT in IIFE)
-L1542  const [passphrase]              // TDZ anchor
-L1545  const [syncStatus]
-L1613  const syncNow = useCallback()
-L1721  const [autoSyncEnabled]         // MUST come after passphrase/syncStatus/syncNow
-L1744  const [autoFareLabel]           // fare auto-fill label
-L4223  function LoginPage()
-L4397  function AdminDashboard()
-L5018  function BookingSection()
-L5054  function BookingCard()
-L5283  export default function TaxiDispatcherApp()
-```
+1. Read CLAUDE.md first — line numbers, data shapes, invariants.
+2. Edit `taxi-dispatcher.jsx` only. NEVER hand-edit `dispatch-hq.html`.
+3. Rebuild (Section 2). Zero errors AND zero warnings required.
+4. Run the QA gate (Section 3). All assertions must pass.
+5. Run runtime smoke (Section 4) — text checks alone miss runtime crashes
+   (a Python `None` leak once shipped with a clean compile).
+6. Deploy: `python3 build.py --push --message "..."` then redeploy
+   dispatch-hq.html to Netlify (SW changes live in the HTML shell).
 
----
-
-## DEPLOYMENT — AUTO (GitHub Actions)
-
-Push `dispatch-hq.html` to master → auto-deploys to Netlify in ~60s.
-No manual deploy needed.
-
-**Fallback only:**
-```bash
-cd C:\dispatch-hq
-netlify deploy --prod --dir .
-```
-
-Live URL: https://capable-custard-36d377.netlify.app/
-Netlify Site ID: 6303731e-02f6-4a6d-97a2-77b1ac626ee1
-
----
-
-## BUILD COMMAND
+## 2. BUILD PIPELINE
 
 ```bash
 python3 -c "
 jsx = open('taxi-dispatcher.jsx').read()
 jsx = jsx.replace('import { useState, useEffect, useCallback, useRef, useMemo } from \"react\";', 'const { useState, useEffect, useCallback, useRef, useMemo } = React;')
 jsx = jsx.replace('export default function TaxiDispatcherApp()', 'function TaxiDispatcherApp()')
-jsx += '\nReactDOM.createRoot(document.getElementById(\"root\"'
-jsx += ')).render(React.createElement(TaxiDispatcherApp));\n'
+jsx += '\nReactDOM.createRoot(document.getElementById(\"root\")).render(React.createElement(TaxiDispatcherApp));\n'
 open('app-for-compile.jsx', 'w').write(jsx)
 "
 esbuild app-for-compile.jsx --jsx=transform --outfile=app-compiled.js --target=es2018
 ```
 
-HTML Injection Markers:
+Flags are immutable: `--target=es2018` (strips `?.`/`??`), `--jsx=transform`
+(classic runtime), NO `--bundle` (React is a CDN global).
+
+HTML injection markers:
 - START: `function runDispatchApp() {\n    // React loaded — run the app\n`
-- END: `\n  // Hide splash after React renders`
+- END:   `\n  // Hide splash after React renders`
 
----
+Escape `</script` as `<\/script` when injecting.
 
-## ARCHITECTURE RULES
+## 3. QA GATE (run after EVERY change)
 
-### Auth — password hashing (CRITICAL)
-```javascript
-// Client: SHA-256(password + "dispatch-hq-client-salt")  ← EXACT
-// NOT: SHA-256(salt + password + "dispatch-hq-2024")      ← WRONG (removed)
+```python
+import re, subprocess
+
+with open('taxi-dispatcher.jsx') as f: c = f.read()
+with open('dispatch-hq.html') as f: h = f.read()
+with open('google-apps-script.js') as f: g = f.read()
+
+# ── Compile: zero errors AND zero warnings ──
+r = subprocess.run(['esbuild','app-for-compile.jsx','--jsx=transform',
+    '--outfile=app-compiled.js','--target=es2018'], capture_output=True)
+assert r.returncode == 0
+assert r.stderr.decode().count('[ERROR]') == 0
+assert r.stderr.decode().count('[WARNING]') == 0
+
+# ── Secrets: SHAPE-based scan, not a hardcoded literal ──
+# Catches ANY 25+ char token assigned to a credential-ish key, current or future.
+assert not re.search(r'(authToken|token|apiKey|password)\s*[:=]\s*["\'][A-Za-z0-9+/_-]{25,}["\']', c)
+assert 'authToken: ""' in c            # empty default; user sets in SYNC settings
+assert not re.search(r'AIzaSy[A-Za-z0-9_-]{10,}', c + h)   # real Maps keys (placeholder "AIzaSy..." passes)
+
+# ── TDZ order ──
+def ln(t): return next(i for i,l in enumerate(c.split('\n')) if t in l)
+assert ln('const [passphrase') < ln('const [syncStatus') < ln('const syncNow =') < ln('const [autoSyncEnabled')
+
+# ── Security ──
+assert 'eval(' not in c and 'dangerouslySetInnerHTML' not in c
+assert not re.search(r'\balert\s*\(', c)
+assert 'const esc = s =>' in c                       # print-slip XSS guard
+assert 'hasOwnProperty' in g
+assert '...' not in g.replace('// ...','')           # GAS V8: no spread
+assert g.index('adminGetUsers') < g.index('if (!checkAuth')
+
+# ── SHIP-HUNT INVARIANTS: these six fixes must never regress ──
+assert not re.search(r':\s*None\b', c)               # 1. Python None leak (runtime crash)
+assert 'AIRPORTS.includes(dAnchor)' in c             # 2. airport beats MHT as fare anchor
+assert 'GENERIC' in c                                # 3. neighborhood beats generic borough key
+assert re.search(r'if \(e === 0\) e = 24', c)        # 4. midnight shift-end = All-Day
+assert 'mins(a.timeSlot) - mins(b.timeSlot)' in c    # 5. chronological sort (not localeCompare)
+assert 'dispatch-hq-v2' in h and '"navigate"' in h or 'navigate' in h  # 6. SW network-first for document
+assert '"8" + spoken.padStart(2, "0")' in c          # voice "driver 19" -> "819"
+assert 'queuePendingDelete(deleteConfirmId)' in c    # 8. deletes tombstone to cloud (no zombies)
+assert 'tombstones.has(b.id)' in c                   #    sync merge shielded from queued deletes
+assert 'if (!w)' in c and 'Print blocked' in c       # 9. print popup null-guarded (iOS PWA)
+assert 'normalizeSpokenNumbers(spoken)' in c         # 10. field mic normalizes numbers
+assert 'today.getFullYear()' in c                    # 11. local todayStr (not UTC toISOString)
+assert 'inSegment' in c                              # 12. town-segment beats street-name substring
+assert 'modifiedAt: sanitize(b.modifiedAt' in c      # 13. reload preserves notes/status/modifiedAt
+assert re.search(r'a\.length \+ b\.length\) >= 7', c) # 14. voice phone digit-merge
+assert 'filters.shift === "allday"' in c             # 15. All-Day filter handled (24h partition)
+assert 'PAGE_LIMIT' in g and 'Too many pages' in c   # 16. list pagination (server cap + client loop)
+assert 'sanitize(fareData' in c                      # 17. fareBreakdown sanitized at write
+assert 'actionPending' in c                          # 18. admin double-submit guard + timeouts
+assert 'if (!townStr || !townStr.trim()) return null;' in c  # 19. empty address -> no phantom fare
+assert 'maxLength = 200' in c and 'raw.length > 200' in c    # 19b. live input caps (Field + AddressField)
+assert not re.search(r'^\s*(async|await|const|let|var|function)\s*$', c, re.M)  # 20. no dangling keywords (orphaned tokens are VALID syntax but crash at runtime)
+assert "skipDivergenceCheck !== true" in c              # inv21 divergence guard strict-true (onClick passes event objects)
+assert "removePendingDelete(undoBooking.id)" in c       # inv22 undo cancels tombstone + stamps modifiedAt
+assert "isMobileDevice" in c                            # inv23 Face ID mobile-only (Windows Hello false-positive)
+assert c.count("setPaymentManuallyEdited(true)") >= 2   # inv24 edit locks negotiated payment
+assert "cancelIsRebook: editingBooking.cancelIsRebook" in c  # inv25 edit preserves cancel status
+assert "bulkToDriver, modifiedAt" in c                  # inv26 ALL mutations stamp modifiedAt (cancel/restore/bulk)
+# 20b. MANDATORY jsdom boot test: compile, then execute the FULL bundle with real
+# React UMD in jsdom (runScripts outside-only) and assert #root renders >500 chars
+# with zero uncaught errors. Compile-clean does NOT mean boot-clean: a bare
+# identifier statement (e.g. orphaned 'async') compiles fine and crashes at startup.
+# The shell's catch previously blamed the React CDN for such crashes — it now logs
+# the real error and shows "App failed to start" instead.
+
+# ── Features present ──
+for token in ['cancelModal','bulkMode','CustomerHistoryView','TemplatesView',
+              'custSuggestions','bookedDrivers','isAirportTrip','dupConfirmed',
+              'NYC_CONGESTION_FEE','findNearbyTown','directMatch',
+              'Payment ($ + tip)','TIP NOT INCLUDED','+tip',
+              'ko-KR','KOR_DIGIT','normalizeSpokenNumbers','730','AES-GCM']:
+    assert token in c, token
+
+# ── HTML shell ──
+assert '18.2.0' in h and '18.3.1' not in h
+assert h.count('integrity="sha384-') >= 2
+assert 'waitForReact' in h and 'serviceWorker' in h
 ```
-- clearLocalSession REMOVED — use clearSession
-- deviceBookings / DevicePassphraseGate REMOVED — Option C permanent
 
-### Temporal Dead Zone — NEVER reorder
-```
-priceCheckMode (L1257) → customDrivers (L1301) → passphrase (L1542)
-→ syncStatus (L1545) → syncNow (L1613) → autoSync (L1721)
-```
+## 4. RUNTIME SMOKE (node)
 
-### GAS Rules
-- All POST: Content-Type: text/plain
-- No spread operators in GAS
-- adminGetUsers BEFORE checkAuth gate in doGet
-- adminGetUsers must include &token= alongside &sessionToken=
+Text assertions can't catch runtime-only crashes. Extract and EXECUTE:
 
-### Driver Management — state in DispatcherApp (NOT IIFE)
-```javascript
-const [customDrivers, setCustomDrivers] = useState(...)  // L1301
-const [showAddDriver, setShowAddDriver] = useState(false) // L1304
+```python
+# Extract TOWN_PRICES..lookupFlatRate block, run in node:
+#   Object.keys(TOWN_PRICES).length          -> matches CLAUDE.md town count
+#   lookupFlatRate("Midtown Manhattan","JFK") -> {fare: 87}
+#   lookupFlatRate("Downtown Manhattan","JFK")-> {fare: 99}   (not 87)
+#   lookupFlatRate("Port Washington","JFK")   -> {fare: 60}
+#   lookupFlatRate("Unknown Town XYZ","JFK")  -> null (no throw)
+# Extract isTimeInShift + formatTime24, verify:
+#   ("2:00 AM","17:00","04:00") -> true   (overnight D50)
+#   ("11:30 PM","04:00","00:00") -> true  (midnight-end D19)
+#   ("9:00 AM" sorts before "10:00 AM" via the mins() comparator)
 ```
 
----
+## 5. PROCESS RULES (the WHY behind the gate)
 
-## DESIGN SYSTEM — Seoul Noir
+- jsx source import is stripped by the build script — never `import React`.
+- `clearSession`, never `clearLocalSession` (removed).
+- Driver IDs are 3-char strings ("808"); spoken "driver 19" maps to "819".
+- `filteredBookings` excludes cancelled: `bookings.filter(b => !b.status)`.
+- `handleBulkSelectAll` computes actives inline — referencing the
+  `filteredBookings` useMemo there is a TDZ crash.
+- All print-slip user fields go through `esc()`.
+- GAS deploys need a NEW VERSION (Deploy → Manage → Edit → New version).
+- After changing the HTML shell (SW, CDN, splash), bump the SW cache name.
 
-```css
---bg-0: #06070d  --bg-1: #0b0d18  --bg-2: #111428
---amber: #f5a623  --slate: #a8b4cc  --white: #f2f0fa
---mono: 'Overpass Mono'   --sans: 'Noto Sans KR'   --display: 'Bebas Neue'
-```
+## 6. HUMAN CHECKLISTS (do not duplicate here)
 
----
-
-## DRIVERS (22 real, 3-digit IDs)
-
-```
-NYC: 808 KANG K Y, 810 SUK, 811 PARK L B, 817 KIM K O, 819 KANG H D,
-     820 KANG KJ, 830 KIM JAMES, 833 KWON S H, 835 YUN G J, 837 KIM Y S,
-     845 NO N I, 850 KANG D R, 855 KIM B S, 857 SEO H G, 860 HAN S H,
-     877 YI BOB, 887 YUN J K, 888 PARK J G, 895 LEE S I
-NJ (24hrs): 100 YOO S H, 500 SONG K Y, 802 OH N S
-```
-
-Driver IDs: always 3-char strings — "808" not 8 — padStart(3,"0")
-
----
-
-## GAS API CONTRACT
-
-```
-GET  ?action=adminGetUsers&token=AUTH_TOKEN&sessionToken=TOKEN  ← both required
-POST { action:"resetPassword", targetUsername, newPasswordHash, sessionToken }
-```
-
-Backend: https://script.google.com/macros/s/AKfycbzRFmi7dn8yy_u6m0YCz7YCHt-_-PNm6VHOVdOMixf_vMBq0SF3lWg1sEQhwWI2J8I-/exec
-Token: kX9mP2vQ8nL5wR3jF7tY4cH6dA1sE0bN
-
----
-
-## COMMON MISTAKES
-
-| Wrong | Correct |
-|-------|---------|
-| SHA-256(salt+password+"2024") | SHA-256(password+"dispatch-hq-client-salt") |
-| clearLocalSession() | clearSession() |
-| deviceBookings state | Removed permanently |
-| React.useState in driver IIFE | State in DispatcherApp L1301 |
-| adminGetUsers without &token= | Must include &token=AUTH_TOKEN |
-| padStart(2,"0") for driver IDs | padStart(3,"0") |
-| FLAT_RATES | TOWN_PRICES |
-| saveMapsKey in Admin | saveAdminMapsKey |
-| Manual Netlify deploy | git push to master |
-
----
-
-## KNOWN LIMITATIONS
-
-1. Admin settings IIFE — 7 React.useState calls. Works. Don't fix without request.
-2. localStorage plaintext — Option C permanent.
-3. AI flight lookup disabled on website (CORS). FlightAware fallback shown.
-4. Admin hash requires GAS console generateAdminHash().
-5. google-apps-script.js gitignored — paste manually into Apps Script when changed.
+- `pre-deploy-checklist.md` — 8-minute manual pass before every Netlify deploy
+- `qa-checklist.md` — full manual regression for major releases
+The skill's QA gate is the automated superset; those files are for the human.
