@@ -608,6 +608,9 @@ function queuePendingDelete(id) {
     savePendingDeletes(ids);
   }
 }
+function removePendingDelete(id) {
+  savePendingDeletes(loadPendingDeletes().filter((x) => x !== id));
+}
 const MAPS_KEY_STORAGE = "dispatch-hq-maps-key";
 function loadMapsKey() {
   try {
@@ -2328,6 +2331,29 @@ function DispatcherApp({ session, onLogout }) {
   const [mapsApiKey, setMapsApiKey] = useState(() => loadMapsKey());
   const [mapsReady, setMapsReady] = useState(true);
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+  const [undoBooking, setUndoBooking] = useState(null);
+  const undoTimerRef = useRef(null);
+  const [exportNudge, setExportNudge] = useState(() => {
+    try {
+      const dismissed = parseInt(localStorage.getItem("dispatch-hq-nudge-dismissed") || "0");
+      if (Date.now() - dismissed < 24 * 60 * 60 * 1e3) return null;
+      const log = JSON.parse(localStorage.getItem(BACKUP_LOG_KEY) || "[]");
+      const exports = log.filter((e) => e.action === "export");
+      if (!exports.length) return "never";
+      const last = new Date(exports[0].timestamp);
+      const days = Math.floor((Date.now() - last) / 864e5);
+      return days > 7 ? `${days} days ago` : null;
+    } catch (e) {
+      return null;
+    }
+  });
+  const dismissExportNudge = () => {
+    setExportNudge(null);
+    try {
+      localStorage.setItem("dispatch-hq-nudge-dismissed", String(Date.now()));
+    } catch (e) {
+    }
+  };
   const [cancelModal, setCancelModal] = useState(null);
   const [cancelReason, setCancelReason] = useState("");
   const [cancelledOpen, setCancelledOpen] = useState(false);
@@ -2639,6 +2665,14 @@ function DispatcherApp({ session, onLogout }) {
   const [passphrase, setPassphrase] = useState("");
   const derivedKeyRef = useRef(null);
   const [syncStatus, setSyncStatus] = useState("idle");
+  const [syncFailing, setSyncFailing] = useState(() => {
+    try {
+      return localStorage.getItem("dispatch-hq-sync-failing") === "true";
+    } catch (e) {
+      return false;
+    }
+  });
+  const [divergenceWarning, setDivergenceWarning] = useState(null);
   const [syncMessage, setSyncMessage] = useState("");
   const [syncEndpointInput, setSyncEndpointInput] = useState(() => loadSyncConfig().endpointUrl);
   const [passphraseInput, setPassphraseInput] = useState("");
@@ -2719,7 +2753,7 @@ function DispatcherApp({ session, onLogout }) {
       setSyncMessage("Verification failed: " + sanitizeErrorMsg(err));
     }
   }, [passphraseInput, syncConfig.passphraseHash]);
-  const syncNow = useCallback(async () => {
+  const syncNow = useCallback(async (skipDivergenceCheck) => {
     if (!syncConfig.endpointUrl || !passphrase) {
       setSyncMessage("Configure endpoint and enter passphrase first");
       setSyncStatus("error");
@@ -2728,6 +2762,20 @@ function DispatcherApp({ session, onLogout }) {
     setSyncStatus("syncing");
     setSyncMessage("Encrypting and uploading...");
     try {
+      if (skipDivergenceCheck !== true) {
+        try {
+          const pingUrl = syncConfig.endpointUrl + "?action=ping&token=" + encodeURIComponent(syncConfig.authToken || "");
+          const pingResp = await SyncService._fetchWithTimeout(pingUrl, { method: "GET", redirect: "follow" }, 1e4);
+          const pingData = await pingResp.json();
+          const serverCount = pingData && typeof pingData.recordCount === "number" ? pingData.recordCount : null;
+          if (serverCount !== null && serverCount >= 10 && bookings.length < serverCount * 0.3) {
+            setSyncStatus("idle");
+            setDivergenceWarning({ server: serverCount, local: bookings.length });
+            return;
+          }
+        } catch (pingErr) {
+        }
+      }
       const batchSalt = crypto.getRandomValues(new Uint8Array(16));
       const batchKey = await CryptoService.deriveKey(passphrase, batchSalt);
       const batchSaltB64 = CryptoService._bufToBase64(batchSalt);
@@ -2755,13 +2803,28 @@ function DispatcherApp({ session, onLogout }) {
         setSyncConfig(newConfig);
         setSyncStatus("success");
         setSyncMessage(`Synced ${result.created} new, ${result.updated} updated \u2014 ${result.totalRecords} total remote records`);
+        setSyncFailing(false);
+        try {
+          localStorage.setItem("dispatch-hq-sync-failing", "false");
+        } catch (e) {
+        }
       } else {
         setSyncStatus("error");
         setSyncMessage("Sync failed: " + (result.error || "Unknown"));
+        setSyncFailing(true);
+        try {
+          localStorage.setItem("dispatch-hq-sync-failing", "true");
+        } catch (e) {
+        }
       }
     } catch (err) {
       setSyncStatus("error");
       setSyncMessage("Sync error: " + sanitizeErrorMsg(err));
+      setSyncFailing(true);
+      try {
+        localStorage.setItem("dispatch-hq-sync-failing", "true");
+      } catch (e) {
+      }
     }
   }, [syncConfig, passphrase, bookings]);
   const pullFromRemote = useCallback(async () => {
@@ -2776,6 +2839,11 @@ function DispatcherApp({ session, onLogout }) {
       const result = await SyncService.fetchAll(syncConfig.endpointUrl, null, syncConfig.authToken);
       if (!result.success) {
         setSyncStatus("error");
+        setSyncFailing(true);
+        try {
+          localStorage.setItem("dispatch-hq-sync-failing", "true");
+        } catch (e) {
+        }
         setSyncMessage("Fetch failed: " + result.error);
         return;
       }
@@ -2840,11 +2908,21 @@ function DispatcherApp({ session, onLogout }) {
       saveSyncConfig(newConfig);
       setSyncConfig(newConfig);
       setSyncStatus("success");
+      setSyncFailing(false);
+      try {
+        localStorage.setItem("dispatch-hq-sync-failing", "false");
+      } catch (e) {
+      }
       const baseMsg = `Pulled ${decrypted.length} records${decryptErrors ? ` (${decryptErrors} failed to decrypt)` : ""}`;
       const conflictNote = overwrittenCount > 0 ? ` \u2014 \u26A0\uFE0F ${overwrittenCount} booking${overwrittenCount > 1 ? "s" : ""} updated from server (another device had a newer version)` : "";
       setSyncMessage(baseMsg + conflictNote);
     } catch (err) {
       setSyncStatus("error");
+      setSyncFailing(true);
+      try {
+        localStorage.setItem("dispatch-hq-sync-failing", "true");
+      } catch (e) {
+      }
       setSyncMessage("Pull error: " + sanitizeErrorMsg(err));
     }
   }, [syncConfig, passphrase, bookings]);
@@ -3509,10 +3587,23 @@ function DispatcherApp({ session, onLogout }) {
   };
   const confirmDelete = () => {
     if (deleteConfirmId) {
+      const deleted = bookings.find((b) => b.id === deleteConfirmId);
       setBookings((prev) => prev.filter((b) => b.id !== deleteConfirmId));
       if (syncConfig && syncConfig.endpointUrl) queuePendingDelete(deleteConfirmId);
       setDeleteConfirmId(null);
+      if (deleted) {
+        clearTimeout(undoTimerRef.current);
+        setUndoBooking(deleted);
+        undoTimerRef.current = setTimeout(() => setUndoBooking(null), 2e4);
+      }
     }
+  };
+  const undoDelete = () => {
+    if (!undoBooking) return;
+    clearTimeout(undoTimerRef.current);
+    setBookings((prev) => [...prev, { ...undoBooking, modifiedAt: (/* @__PURE__ */ new Date()).toISOString() }]);
+    removePendingDelete(undoBooking.id);
+    setUndoBooking(null);
   };
   const editBooking = (b) => {
     setForm({ customerName: b.customerName, pickupAddress: b.pickupAddress, dropoffAddress: b.dropoffAddress, airline: b.airline, flightNumber: b.flightNumber, passengers: b.passengers, luggage: b.luggage, tripType: b.tripType, phone: b.phone, paymentAmount: b.paymentAmount, driverNumber: b.driverNumber, date: b.date, timeSlot: b.timeSlot, customTime: "", notes: b.notes || "" });
@@ -3692,7 +3783,7 @@ function DispatcherApp({ session, onLogout }) {
     letterSpacing: "0.08em",
     transition: "color 0.15s, border-color 0.15s",
     whiteSpace: "nowrap"
-  } }, label)), /* @__PURE__ */ React.createElement("div", { style: { width: 1, height: 18, background: "var(--border-0)", margin: "0 8px" } }), /* @__PURE__ */ React.createElement("button", { onClick: () => clearSession(), style: { padding: "5px 10px", borderRadius: "var(--r)", border: "1px solid var(--border-0)", background: "transparent", color: "var(--text-2)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "var(--mono)", letterSpacing: "0.08em" } }, "EXIT"))), /* @__PURE__ */ React.createElement("nav", { role: "navigation", "aria-label": "Main navigation", className: "bottom-nav" }, [["booking", "BOOK"], ["dashboard", "DASH"], ["customers", "CUST"], ["templates", "TMPL"], ["drivers", "FLEET"], ["sync", "SYNC"], ["backup", "BAK"]].map(([v, label]) => /* @__PURE__ */ React.createElement("button", { key: v, onClick: () => setView(v), className: `bottom-nav-btn${view === v ? " active" : ""}`, "aria-label": v }, /* @__PURE__ */ React.createElement("span", null, label))), /* @__PURE__ */ React.createElement("button", { onClick: () => clearSession(), className: "bottom-nav-btn", "aria-label": "Sign out" }, /* @__PURE__ */ React.createElement("span", null, "EXIT"))), /* @__PURE__ */ React.createElement("main", { role: "main", "aria-label": "Dispatch HQ Application", className: "safe-main", style: { maxWidth: 980, margin: "0 auto", padding: "20px 16px" } }, !gdprDismissed && /* @__PURE__ */ React.createElement("div", { role: "alert", style: { padding: "14px 18px", borderRadius: 10, marginBottom: 20, background: "rgba(61,159,255,0.05)", border: "1px solid rgba(61,159,255,0.15)", display: "flex", alignItems: "flex-start", gap: 12 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 14, marginTop: 1 } }, "\u{1F512}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 13, fontWeight: 600, color: "var(--green)", marginBottom: 4, fontFamily: "var(--sans)" } }, "Privacy Notice"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, color: "var(--text-2)", lineHeight: 1.6 } }, "This app stores customer booking data on your device. Cloud Backup encrypts all data before transmission. AI Smart Fill sends booking text to Anthropic's API \u2014 don't include sensitive data beyond what's needed. Bookings auto-purge after 2 years.")), /* @__PURE__ */ React.createElement("button", { onClick: dismissGdpr, style: { padding: "5px 14px", borderRadius: 6, border: "none", background: "rgba(61,159,255,0.15)", color: "var(--green)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "var(--sans)", flexShrink: 0, whiteSpace: "nowrap" } }, "Got it")), view === "booking" && /* @__PURE__ */ React.createElement("div", { role: "form", "aria-label": "New booking form" }, /* @__PURE__ */ React.createElement("div", { className: "card-enter booking-form-mobile" }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h2", { style: { fontSize: 26, fontWeight: 800, color: "var(--text-1)", fontFamily: "var(--sans)", background: "var(--bg-0)", letterSpacing: "-0.01em" } }, editingBooking ? "EDIT BOOKING" : priceCheckMode ? "PRICE CHECK" : "NEW BOOKING"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 11, color: "var(--text-3)", fontFamily: "var(--mono)", letterSpacing: "0.12em", marginTop: 2 } }, (/* @__PURE__ */ new Date()).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }).toUpperCase())), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center" } }, !editingBooking && /* @__PURE__ */ React.createElement(
+  } }, label, v === "sync" && syncFailing && /* @__PURE__ */ React.createElement("span", { style: { display: "inline-block", width: 7, height: 7, borderRadius: "50%", background: "var(--red)", marginLeft: 5, verticalAlign: "middle" } }))), /* @__PURE__ */ React.createElement("div", { style: { width: 1, height: 18, background: "var(--border-0)", margin: "0 8px" } }), /* @__PURE__ */ React.createElement("button", { onClick: () => clearSession(), style: { padding: "5px 10px", borderRadius: "var(--r)", border: "1px solid var(--border-0)", background: "transparent", color: "var(--text-2)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "var(--mono)", letterSpacing: "0.08em" } }, "EXIT"))), /* @__PURE__ */ React.createElement("nav", { role: "navigation", "aria-label": "Main navigation", className: "bottom-nav" }, [["booking", "BOOK"], ["dashboard", "DASH"], ["customers", "CUST"], ["templates", "TMPL"], ["drivers", "FLEET"], ["sync", "SYNC"], ["backup", "BAK"]].map(([v, label]) => /* @__PURE__ */ React.createElement("button", { key: v, onClick: () => setView(v), className: `bottom-nav-btn${view === v ? " active" : ""}`, "aria-label": v }, /* @__PURE__ */ React.createElement("span", null, label, v === "sync" && syncFailing && /* @__PURE__ */ React.createElement("span", { style: { display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "var(--red)", marginLeft: 4, verticalAlign: "middle" } })))), /* @__PURE__ */ React.createElement("button", { onClick: () => clearSession(), className: "bottom-nav-btn", "aria-label": "Sign out" }, /* @__PURE__ */ React.createElement("span", null, "EXIT"))), /* @__PURE__ */ React.createElement("main", { role: "main", "aria-label": "Dispatch HQ Application", className: "safe-main", style: { maxWidth: 980, margin: "0 auto", padding: "20px 16px" } }, !gdprDismissed && /* @__PURE__ */ React.createElement("div", { role: "alert", style: { padding: "14px 18px", borderRadius: 10, marginBottom: 20, background: "rgba(61,159,255,0.05)", border: "1px solid rgba(61,159,255,0.15)", display: "flex", alignItems: "flex-start", gap: 12 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 14, marginTop: 1 } }, "\u{1F512}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 13, fontWeight: 600, color: "var(--green)", marginBottom: 4, fontFamily: "var(--sans)" } }, "Privacy Notice"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, color: "var(--text-2)", lineHeight: 1.6 } }, "This app stores customer booking data on your device. Cloud Backup encrypts all data before transmission. AI Smart Fill sends booking text to Anthropic's API \u2014 don't include sensitive data beyond what's needed. Bookings auto-purge after 2 years.")), /* @__PURE__ */ React.createElement("button", { onClick: dismissGdpr, style: { padding: "5px 14px", borderRadius: 6, border: "none", background: "rgba(61,159,255,0.15)", color: "var(--green)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "var(--sans)", flexShrink: 0, whiteSpace: "nowrap" } }, "Got it")), view === "booking" && /* @__PURE__ */ React.createElement("div", { role: "form", "aria-label": "New booking form" }, /* @__PURE__ */ React.createElement("div", { className: "card-enter booking-form-mobile" }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h2", { style: { fontSize: 26, fontWeight: 800, color: "var(--text-1)", fontFamily: "var(--sans)", background: "var(--bg-0)", letterSpacing: "-0.01em" } }, editingBooking ? "EDIT BOOKING" : priceCheckMode ? "PRICE CHECK" : "NEW BOOKING"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 11, color: "var(--text-3)", fontFamily: "var(--mono)", letterSpacing: "0.12em", marginTop: 2 } }, (/* @__PURE__ */ new Date()).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }).toUpperCase())), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center" } }, !editingBooking && /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: () => {
@@ -4208,7 +4299,44 @@ function DispatcherApp({ session, onLogout }) {
       setFormError("");
       setMissingFields([]);
     }, style: { background: "transparent", border: "none", color: "var(--text-2)", fontSize: 16, cursor: "pointer", flexShrink: 0 } }, "\u2715")), requiredList.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 8 } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 12, color: "var(--red)", fontWeight: 600, marginBottom: 6 } }, "Required:"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } }, requiredList.map((f) => /* @__PURE__ */ React.createElement("span", { key: f, style: { padding: "4px 10px", borderRadius: 6, background: "rgba(220,38,38,0.08)", border: "1px solid #3a1a1a", color: "var(--red)", fontSize: 13, fontWeight: 600 } }, "\u2717 ", f)))), optionalList.length > 0 && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 12, color: "var(--amber)", fontWeight: 600, marginBottom: 6 } }, isRequired ? "Also empty (optional):" : "Empty fields:"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } }, optionalList.map((f) => /* @__PURE__ */ React.createElement("span", { key: f, style: { padding: "4px 10px", borderRadius: 6, background: "rgba(217,119,6,0.06)", border: "1px solid #3a3a1a", color: "var(--amber)", fontSize: 13 } }, "\u25CB ", f)))), isRequired && /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, color: "var(--text-2)", fontWeight: 500, marginTop: 8 } }, "Fill in the red-highlighted fields above and try again. ", /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--sans)", opacity: 0.8 } }, "\uC704\uC758 \uBE68\uAC04\uC0C9 \uD56D\uBAA9\uC744 \uC785\uB825\uD558\uACE0 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694.")));
-  })(), /* @__PURE__ */ React.createElement("button", { onClick: handleSubmit, disabled: isSubmitting, className: "confirm-btn", "aria-label": isSubmitting ? "Saving booking" : editingBooking ? "Update booking" : "Confirm booking", style: { width: "100%", padding: 16, borderRadius: 12, border: "none", background: isSubmitting ? "var(--bg-2)" : "var(--amber)", color: isSubmitting ? "var(--text-3)" : "#0a0a0a", fontSize: 14, fontWeight: 700, cursor: isSubmitting ? "not-allowed" : "pointer", fontFamily: "var(--mono)", letterSpacing: "0.14em", boxShadow: isSubmitting ? "none" : "0 4px 16px rgba(240,165,0,0.25)", opacity: isSubmitting ? 0.6 : 1, transition: "all 0.2s" } }, isSubmitting ? "\u23F3 SAVING..." : editingBooking ? "UPDATE BOOKING \u2713" : "CONFIRM BOOKING \u2713")))), showConfirm && /* @__PURE__ */ React.createElement(
+  })(), /* @__PURE__ */ React.createElement("button", { onClick: handleSubmit, disabled: isSubmitting, className: "confirm-btn", "aria-label": isSubmitting ? "Saving booking" : editingBooking ? "Update booking" : "Confirm booking", style: { width: "100%", padding: 16, borderRadius: 12, border: "none", background: isSubmitting ? "var(--bg-2)" : "var(--amber)", color: isSubmitting ? "var(--text-3)" : "#0a0a0a", fontSize: 14, fontWeight: 700, cursor: isSubmitting ? "not-allowed" : "pointer", fontFamily: "var(--mono)", letterSpacing: "0.14em", boxShadow: isSubmitting ? "none" : "0 4px 16px rgba(240,165,0,0.25)", opacity: isSubmitting ? 0.6 : 1, transition: "all 0.2s" } }, isSubmitting ? "\u23F3 SAVING..." : editingBooking ? "UPDATE BOOKING \u2713" : "CONFIRM BOOKING \u2713")))), undoBooking && /* @__PURE__ */ React.createElement("div", { style: {
+    position: "fixed",
+    bottom: 74,
+    left: "50%",
+    transform: "translateX(-50%)",
+    zIndex: 9e3,
+    background: "var(--bg-1)",
+    border: "1px solid var(--border-1)",
+    borderRadius: 12,
+    padding: "12px 18px",
+    display: "flex",
+    alignItems: "center",
+    gap: 14,
+    boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+    maxWidth: "92vw"
+  } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, color: "var(--text-1)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, "Deleted: ", /* @__PURE__ */ React.createElement("b", null, undoBooking.customerName), " ", undoBooking.date, " ", undoBooking.timeSlot), /* @__PURE__ */ React.createElement("button", { onClick: undoDelete, style: {
+    padding: "8px 18px",
+    borderRadius: 8,
+    border: "none",
+    background: "var(--amber)",
+    color: "#0a0600",
+    fontSize: 13,
+    fontWeight: 800,
+    cursor: "pointer",
+    fontFamily: "var(--mono)",
+    letterSpacing: "0.06em",
+    flexShrink: 0
+  } }, "UNDO")), exportNudge && bookings.length > 0 && /* @__PURE__ */ React.createElement("div", { style: {
+    background: "rgba(245,166,35,0.07)",
+    borderBottom: "1px solid rgba(245,166,35,0.25)",
+    padding: "8px 14px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+    fontSize: 12.5,
+    color: "var(--amber)"
+  } }, /* @__PURE__ */ React.createElement("span", null, "\u{1F4BE} Last backup export: ", exportNudge, " \u2014 keep an offline copy safe."), /* @__PURE__ */ React.createElement("button", { onClick: () => setView("backup"), style: { padding: "4px 12px", borderRadius: 6, border: "1px solid rgba(245,166,35,0.4)", background: "transparent", color: "var(--amber)", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" } }, "Export"), /* @__PURE__ */ React.createElement("button", { onClick: dismissExportNudge, style: { padding: "4px 8px", borderRadius: 6, border: "none", background: "transparent", color: "var(--text-3)", fontSize: 12, cursor: "pointer", fontFamily: "inherit" } }, "\u2715")), showConfirm && /* @__PURE__ */ React.createElement(
     "div",
     {
       role: "dialog",
@@ -4692,7 +4820,7 @@ function DispatcherApp({ session, onLogout }) {
     } catch (e) {
     }
     ;
-  }, disabled: !passphrase, style: { padding: "7px 14px", borderRadius: 8, border: "none", background: autoSyncEnabled ? "linear-gradient(135deg,#1a5a2a,#1a7a3a)" : "var(--border-0)", color: autoSyncEnabled ? "#fff" : "#8892a8", fontSize: 13, fontWeight: 700, cursor: passphrase ? "pointer" : "not-allowed", fontFamily: "inherit", opacity: passphrase ? 1 : 0.4 } }, autoSyncEnabled ? "ON" : "OFF"))), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, fontWeight: 700, color: "var(--green)", marginBottom: 14, letterSpacing: "0.1em" } }, "1. GOOGLE SHEETS ENDPOINT"), /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Web App URL"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 12, color: "var(--text-2)", marginBottom: 6 } }, "Paste the Google Apps Script URL from your setup. See the Setup Guide for step-by-step instructions."), /* @__PURE__ */ React.createElement(
+  }, disabled: !passphrase, style: { padding: "7px 14px", borderRadius: 8, border: "none", background: autoSyncEnabled ? "linear-gradient(135deg,#1a5a2a,#1a7a3a)" : "var(--border-0)", color: autoSyncEnabled ? "#fff" : "#8892a8", fontSize: 13, fontWeight: 700, cursor: passphrase ? "pointer" : "not-allowed", fontFamily: "inherit", opacity: passphrase ? 1 : 0.4 } }, autoSyncEnabled ? "ON" : "OFF"))), syncFailing && /* @__PURE__ */ React.createElement("div", { style: { background: "rgba(220,38,38,0.08)", border: "1px solid rgba(220,38,38,0.35)", borderRadius: 10, padding: "10px 14px", marginBottom: 14, fontSize: 13, color: "var(--red)" } }, "\u26A0 Last sync attempt FAILED \u2014 bookings may not be backed up. Check token/connection below."), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 12, color: "var(--text-3)", marginBottom: 12, fontFamily: "var(--mono)" } }, "Last successful sync: ", syncConfig.lastSync ? new Date(syncConfig.lastSync).toLocaleString() : "never"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, fontWeight: 700, color: "var(--green)", marginBottom: 14, letterSpacing: "0.1em" } }, "1. GOOGLE SHEETS ENDPOINT"), /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Web App URL"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 12, color: "var(--text-2)", marginBottom: 6 } }, "Paste the Google Apps Script URL from your setup. See the Setup Guide for step-by-step instructions."), /* @__PURE__ */ React.createElement(
     "input",
     {
       type: "url",
@@ -4742,7 +4870,10 @@ function DispatcherApp({ session, onLogout }) {
     fontWeight: 700,
     cursor: passphraseInput.length >= 8 ? "pointer" : "default",
     fontFamily: "inherit"
-  } }, "\u{1F510} Save & Encrypt")), passphrase && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8, display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { style: { width: 8, height: 8, borderRadius: "50%", background: "var(--green)", display: "inline-block" } }), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, color: "var(--green)" } }, "Passphrase active \u2014 encryption ready"))), syncConfigured && passphrase && /* @__PURE__ */ React.createElement("div", { style: { background: "var(--bg-1)", border: "1px solid #1e2028", borderRadius: 14, padding: 18, marginBottom: 14 } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, fontWeight: 700, color: "var(--green)", marginBottom: 14, letterSpacing: "0.1em" } }, "3. SYNC CONTROLS"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 12 } }, /* @__PURE__ */ React.createElement("button", { onClick: syncNow, disabled: syncStatus === "syncing", style: {
+  } }, "\u{1F510} Save & Encrypt")), passphrase && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8, display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { style: { width: 8, height: 8, borderRadius: "50%", background: "var(--green)", display: "inline-block" } }), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, color: "var(--green)" } }, "Passphrase active \u2014 encryption ready"))), divergenceWarning && /* @__PURE__ */ React.createElement("div", { style: { background: "rgba(245,166,35,0.08)", border: "1px solid rgba(245,166,35,0.4)", borderRadius: 14, padding: 18, marginBottom: 14 } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, fontWeight: 700, color: "var(--amber)", marginBottom: 8 } }, "\u26A0 PUSH BLOCKED \u2014 DATA MISMATCH"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 13, color: "var(--text-1)", lineHeight: 1.6, marginBottom: 12 } }, "The server has ", /* @__PURE__ */ React.createElement("b", null, divergenceWarning.server), " bookings but this device only has ", /* @__PURE__ */ React.createElement("b", null, divergenceWarning.local), ". Pushing now could indicate lost local data. If this device recently cleared its storage, ", /* @__PURE__ */ React.createElement("b", null, "Pull from Sheets first"), " instead."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setDivergenceWarning(null), style: { flex: 1, padding: "10px", borderRadius: 8, border: "1px solid var(--border-1)", background: "transparent", color: "var(--text-2)", fontSize: 14, cursor: "pointer", fontFamily: "inherit" } }, "Cancel"), /* @__PURE__ */ React.createElement("button", { onClick: () => {
+    setDivergenceWarning(null);
+    syncNow(true);
+  }, style: { flex: 1, padding: "10px", borderRadius: 8, border: "none", background: "var(--amber)", color: "#0a0600", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" } }, "Push Anyway"))), syncConfigured && passphrase && /* @__PURE__ */ React.createElement("div", { style: { background: "var(--bg-1)", border: "1px solid #1e2028", borderRadius: 14, padding: 18, marginBottom: 14 } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, fontWeight: 700, color: "var(--green)", marginBottom: 14, letterSpacing: "0.1em" } }, "3. SYNC CONTROLS"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 12 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => syncNow(false), disabled: syncStatus === "syncing", style: {
     flex: 1,
     padding: "14px",
     borderRadius: 10,
