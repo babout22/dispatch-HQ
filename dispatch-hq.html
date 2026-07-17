@@ -2467,7 +2467,10 @@ function DispatcherApp({ session, onLogout }) {
         cancelFee: fee,
         cancelFreeOfCharge: waived,
         cancelIsRebook: isRebook,
-        cancelledAt: (/* @__PURE__ */ new Date()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+        cancelledAt: (/* @__PURE__ */ new Date()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }),
+        // SYNC KEY: every mutation must bump modifiedAt or newer-wins merge
+        // reverts it on the next pull (same mechanism as the reload bug).
+        modifiedAt: (/* @__PURE__ */ new Date()).toISOString()
       };
     }));
     setCancelModal(null);
@@ -2481,7 +2484,9 @@ function DispatcherApp({ session, onLogout }) {
       cancelFee: void 0,
       cancelFreeOfCharge: void 0,
       cancelIsRebook: void 0,
-      cancelledAt: void 0
+      cancelledAt: void 0,
+      modifiedAt: (/* @__PURE__ */ new Date()).toISOString()
+      // sync key — see cancelBooking
     }));
   }, []);
   const handleCancelModal = useCallback((id, type) => {
@@ -2504,7 +2509,7 @@ function DispatcherApp({ session, onLogout }) {
   const handleBulkReassign = useCallback(() => {
     if (!bulkToDriver || bulkSelected.size === 0) return;
     setBookings((prev) => prev.map(
-      (b) => bulkSelected.has(b.id) ? { ...b, driverNumber: bulkToDriver } : b
+      (b) => bulkSelected.has(b.id) ? { ...b, driverNumber: bulkToDriver, modifiedAt: (/* @__PURE__ */ new Date()).toISOString() } : b
     ));
     setBulkStep(2);
   }, [bulkToDriver, bulkSelected]);
@@ -3565,7 +3570,16 @@ function DispatcherApp({ session, onLogout }) {
       fareBreakdown: sanitize(fareData ? `$${fareData.base_fare || 0}${fareData.toll ? ` +$${fareData.toll} toll` : ""}` : "", 60)
     };
     if (editingBooking) {
-      setBookings((prev) => prev.map((b) => b.id === editingBooking.id ? { ...booking, id: editingBooking.id } : b));
+      setBookings((prev) => prev.map((b) => b.id === editingBooking.id ? {
+        ...booking,
+        id: editingBooking.id,
+        status: editingBooking.status,
+        cancelReason: editingBooking.cancelReason,
+        cancelFee: editingBooking.cancelFee,
+        cancelFreeOfCharge: editingBooking.cancelFreeOfCharge,
+        cancelIsRebook: editingBooking.cancelIsRebook,
+        cancelledAt: editingBooking.cancelledAt
+      } : b));
       setEditingBooking(null);
     } else {
       setBookings((prev) => [...prev, booking]);
@@ -3608,6 +3622,7 @@ function DispatcherApp({ session, onLogout }) {
   const editBooking = (b) => {
     setForm({ customerName: b.customerName, pickupAddress: b.pickupAddress, dropoffAddress: b.dropoffAddress, airline: b.airline, flightNumber: b.flightNumber, passengers: b.passengers, luggage: b.luggage, tripType: b.tripType, phone: b.phone, paymentAmount: b.paymentAmount, driverNumber: b.driverNumber, date: b.date, timeSlot: b.timeSlot, customTime: "", notes: b.notes || "" });
     setEditingBooking(b);
+    setPaymentManuallyEdited(true);
     if (b.flightStatus) setFlightData({ status: b.flightStatus, scheduled_arrival: b.flightArrival, flight_number: b.flightNumber, airline: b.airline });
     if (b.fareRoute) setFareData({ found: true, route: b.fareRoute, total: b.paymentAmount });
     setView("booking");
