@@ -1605,19 +1605,25 @@ const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", 
 const AM_SLOTS = ["4:00 AM", "4:30 AM", "5:00 AM", "5:30 AM", "6:00 AM", "6:30 AM", "7:00 AM", "7:30 AM", "8:00 AM", "8:30 AM", "9:00 AM", "9:30 AM", "10:00 AM", "10:30 AM", "11:00 AM", "11:30 AM"];
 const PM_SLOTS = ["12:00 PM", "12:30 PM", "1:00 PM", "1:30 PM", "2:00 PM", "2:30 PM", "3:00 PM", "3:30 PM", "4:00 PM", "4:30 PM", "5:00 PM", "5:30 PM", "6:00 PM", "6:30 PM", "7:00 PM", "7:30 PM", "8:00 PM", "8:30 PM", "9:00 PM", "9:30 PM", "10:00 PM", "10:30 PM", "11:00 PM", "11:30 PM"];
 function getDriverShift(driver, date) {
+  if (!driver || typeof driver !== "object" || typeof driver.shiftStart !== "string" || typeof driver.shiftEnd !== "string") {
+    return { available: false, start: "00:00", end: "00:00", note: "invalid driver record" };
+  }
+  const daysOff = Array.isArray(driver.daysOff) ? driver.daysOff : [];
+  const monthlyOff = Array.isArray(driver.monthlyOff) ? driver.monthlyOff : [];
+  const specialShifts = Array.isArray(driver.specialShifts) ? driver.specialShifts : [];
   const d = /* @__PURE__ */ new Date(date + "T12:00:00");
   const dayName = DAYS[d.getDay()];
   const dayOfMonth = d.getDate();
-  if (driver.daysOff.includes(dayName)) {
-    if (driver.specialShifts) {
-      const sp = driver.specialShifts.find((s) => s.day === dayName);
+  if (daysOff.includes(dayName)) {
+    if (specialShifts) {
+      const sp = specialShifts.find((s) => s.day === dayName);
       if (sp) return { available: true, start: sp.start, end: sp.end, limited: true };
     }
     return { available: false };
   }
-  if (driver.monthlyOff && driver.monthlyOff.includes(dayOfMonth)) return { available: false };
-  if (driver.specialShifts) {
-    const sp = driver.specialShifts.find((s) => s.day === dayName);
+  if (monthlyOff && monthlyOff.includes(dayOfMonth)) return { available: false };
+  if (specialShifts) {
+    const sp = specialShifts.find((s) => s.day === dayName);
     if (sp) return { available: true, start: sp.start, end: sp.end, limited: true };
   }
   return { available: true, start: driver.shiftStart, end: driver.shiftEnd, limited: false };
@@ -2313,14 +2319,23 @@ function DispatcherApp({ session, onLogout }) {
   const [bulkSelected, setBulkSelected] = useState(/* @__PURE__ */ new Set());
   const [bulkStep, setBulkStep] = useState(0);
   const [bulkToDriver, setBulkToDriver] = useState("");
+  const isValidDriver = (d) => d !== null && typeof d === "object" && !Array.isArray(d) && !Object.prototype.hasOwnProperty.call(d, "__proto__") && typeof d.id === "string" && d.id.length > 0 && typeof d.shiftStart === "string" && typeof d.shiftEnd === "string";
+  const normalizeDriver = (d) => ({
+    ...d,
+    daysOff: Array.isArray(d.daysOff) ? d.daysOff : [],
+    monthlyOff: Array.isArray(d.monthlyOff) ? d.monthlyOff : [],
+    specialShifts: Array.isArray(d.specialShifts) ? d.specialShifts : []
+  });
   const [customDrivers, setCustomDrivers] = useState(() => {
     try {
-      return JSON.parse(localStorage.getItem("dispatch-hq-custom-drivers") || "[]");
+      const saved = JSON.parse(localStorage.getItem("dispatch-hq-custom-drivers") || "[]");
+      return Array.isArray(saved) ? saved.filter(isValidDriver).map(normalizeDriver) : [];
     } catch (e) {
       return [];
     }
   });
   const [showAddDriver, setShowAddDriver] = useState(false);
+  const [wipeDriversConfirm, setWipeDriversConfirm] = useState(false);
   const [dForm, setDForm] = useState({ id: "", shiftStart: "06:00", shiftEnd: "18:00", daysOff: "", monthlyOff: "", airportPickup: false, airportDropoff: false, notes: "" });
   const [dFormErr, setDFormErr] = useState("");
   const [showTimePicker, setShowTimePicker] = useState(false);
@@ -2331,6 +2346,11 @@ function DispatcherApp({ session, onLogout }) {
   const [mapsApiKey, setMapsApiKey] = useState(() => loadMapsKey());
   const [mapsReady, setMapsReady] = useState(true);
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+  const [archiveSearch, setArchiveSearch] = useState("");
+  const [archiveType, setArchiveType] = useState("all");
+  const [archiveFrom, setArchiveFrom] = useState("");
+  const [archiveTo, setArchiveTo] = useState("");
+  const [archivePage, setArchivePage] = useState(100);
   const [undoBooking, setUndoBooking] = useState(null);
   const undoTimerRef = useRef(null);
   const [exportNudge, setExportNudge] = useState(() => {
@@ -2476,6 +2496,37 @@ function DispatcherApp({ session, onLogout }) {
     setCancelModal(null);
     setCancelReason("");
   }, []);
+  const archivedBookings = useMemo(() => {
+    const now = /* @__PURE__ */ new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const tagged = bookings.filter((b) => b.status === "cancelled" || b.status === "noshow" || !b.status && b.date && b.date < todayStr).map((b) => ({ ...b, _archiveType: b.status === "noshow" ? "noshow" : b.status === "cancelled" ? "cancelled" : "past" }));
+    let result = tagged;
+    if (archiveType !== "all") result = result.filter((b) => b._archiveType === archiveType);
+    if (archiveFrom) result = result.filter((b) => b.date >= archiveFrom);
+    if (archiveTo) result = result.filter((b) => b.date <= archiveTo);
+    const q = archiveSearch.trim().toLowerCase();
+    if (q) {
+      result = result.filter((b) => [b.customerName, b.phone, b.driverNumber, b.date, b.airline, b.flightNumber, b.pickupAddress, b.dropoffAddress, b.cancelReason].some((f) => String(f || "").toLowerCase().includes(q)));
+    }
+    const toMins = (t) => {
+      const x = formatTime24(t || "12:00 AM");
+      return parseInt(x.split(":")[0]) * 60 + parseInt(x.split(":")[1]);
+    };
+    return result.sort((a, b) => (b.date || "").localeCompare(a.date || "") || toMins(b.timeSlot) - toMins(a.timeSlot));
+  }, [bookings, archiveType, archiveFrom, archiveTo, archiveSearch]);
+  const archiveStats = useMemo(() => {
+    const now = /* @__PURE__ */ new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const all = bookings.filter((b) => b.status === "cancelled" || b.status === "noshow" || !b.status && b.date && b.date < todayStr);
+    return {
+      total: all.length,
+      past: all.filter((b) => !b.status).length,
+      cancelled: all.filter((b) => b.status === "cancelled").length,
+      noshow: all.filter((b) => b.status === "noshow").length,
+      fees: all.reduce((s, b) => s + (Number(b.cancelFee) || 0), 0),
+      revenue: all.filter((b) => !b.status).reduce((s, b) => s + (Number(b.paymentAmount) || 0), 0)
+    };
+  }, [bookings]);
   const handleRestoreBooking = useCallback((id) => {
     setBookings((prev) => prev.map((b) => b.id !== id ? b : {
       ...b,
@@ -3782,7 +3833,7 @@ function DispatcherApp({ session, onLogout }) {
           outline: 2px solid #ff6b35 !important;
           outline-offset: 2px;
         }
-      `), /* @__PURE__ */ React.createElement("header", { className: "safe-header", style: { background: "rgba(9,21,8,0.97)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", borderBottom: "1px solid var(--border-0)", boxShadow: "0 1px 0 rgba(76,175,106,0.1)", paddingLeft: 16, paddingRight: 16, paddingTop: "max(env(safe-area-inset-top), 44px)", paddingBottom: 0, position: "sticky", top: 0, zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "space-between", minHeight: "calc(54px + max(env(safe-area-inset-top), 44px))", boxSizing: "border-box" } }, /* @__PURE__ */ React.createElement("div", { style: { position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "linear-gradient(90deg, var(--amber) 0%, rgba(240,165,0,0.2) 50%, transparent 100%)", pointerEvents: "none" } }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { width: 28, height: 28, borderRadius: 7, background: "linear-gradient(135deg, #8a6000, var(--amber))", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, boxShadow: "0 0 12px rgba(240,165,0,0.2)" } }, "\u{1F696}"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: 15, fontWeight: 700, letterSpacing: "0.1em", color: "var(--amber)", fontFamily: "var(--display)", lineHeight: 1 } }, "DISPATCH HQ"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 9, color: "var(--text-3)", fontFamily: "var(--mono)", letterSpacing: "0.1em", marginTop: 2, lineHeight: 1 } }, session ? (session.displayName || session.username).toUpperCase() : "DISPATCHER"))), /* @__PURE__ */ React.createElement("nav", { role: "navigation", "aria-label": "Main tabs", className: "top-nav-tabs", style: { display: "flex", gap: 0, alignItems: "center", overflowX: "auto", WebkitOverflowScrolling: "touch", msOverflowStyle: "none", scrollbarWidth: "none", height: 54 } }, syncConfigured && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, marginRight: 12, color: syncStatus === "syncing" ? "var(--green)" : passphrase ? "var(--green)" : "var(--text-3)", display: "flex", alignItems: "center", gap: 5, fontFamily: "var(--mono)", letterSpacing: "0.1em" } }, /* @__PURE__ */ React.createElement("span", { style: { width: 5, height: 5, borderRadius: "50%", background: syncStatus === "syncing" ? "var(--green)" : passphrase ? "var(--green)" : "var(--text-3)", display: "inline-block", animation: "pulse-dot 1.5s infinite" } }), syncStatus === "syncing" ? "SYNC" : passphrase ? "LIVE" : "OFF"), [["booking", "BOOK"], ["dashboard", "DASH"], ["customers", "CUST"], ["templates", "TMPL"], ["drivers", "FLEET"], ["sync", "SYNC"], ["backup", "BACKUP"]].map(([v, label]) => /* @__PURE__ */ React.createElement("button", { key: v, onClick: () => setView(v), style: {
+      `), /* @__PURE__ */ React.createElement("header", { className: "safe-header", style: { background: "rgba(9,21,8,0.97)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", borderBottom: "1px solid var(--border-0)", boxShadow: "0 1px 0 rgba(76,175,106,0.1)", paddingLeft: 16, paddingRight: 16, paddingTop: "max(env(safe-area-inset-top), 44px)", paddingBottom: 0, position: "sticky", top: 0, zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "space-between", minHeight: "calc(54px + max(env(safe-area-inset-top), 44px))", boxSizing: "border-box" } }, /* @__PURE__ */ React.createElement("div", { style: { position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "linear-gradient(90deg, var(--amber) 0%, rgba(240,165,0,0.2) 50%, transparent 100%)", pointerEvents: "none" } }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { width: 28, height: 28, borderRadius: 7, background: "linear-gradient(135deg, #8a6000, var(--amber))", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, boxShadow: "0 0 12px rgba(240,165,0,0.2)" } }, "\u{1F696}"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: 15, fontWeight: 700, letterSpacing: "0.1em", color: "var(--amber)", fontFamily: "var(--display)", lineHeight: 1 } }, "DISPATCH HQ"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 9, color: "var(--text-3)", fontFamily: "var(--mono)", letterSpacing: "0.1em", marginTop: 2, lineHeight: 1 } }, session ? (session.displayName || session.username).toUpperCase() : "DISPATCHER"))), /* @__PURE__ */ React.createElement("nav", { role: "navigation", "aria-label": "Main tabs", className: "top-nav-tabs", style: { display: "flex", gap: 0, alignItems: "center", overflowX: "auto", WebkitOverflowScrolling: "touch", msOverflowStyle: "none", scrollbarWidth: "none", height: 54 } }, syncConfigured && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, marginRight: 12, color: syncStatus === "syncing" ? "var(--green)" : passphrase ? "var(--green)" : "var(--text-3)", display: "flex", alignItems: "center", gap: 5, fontFamily: "var(--mono)", letterSpacing: "0.1em" } }, /* @__PURE__ */ React.createElement("span", { style: { width: 5, height: 5, borderRadius: "50%", background: syncStatus === "syncing" ? "var(--green)" : passphrase ? "var(--green)" : "var(--text-3)", display: "inline-block", animation: "pulse-dot 1.5s infinite" } }), syncStatus === "syncing" ? "SYNC" : passphrase ? "LIVE" : "OFF"), [["booking", "BOOK"], ["dashboard", "DASH"], ["archive", "ARCHIVE"], ["customers", "CUST"], ["templates", "TMPL"], ["drivers", "FLEET"], ["sync", "SYNC"], ["backup", "BACKUP"]].map(([v, label]) => /* @__PURE__ */ React.createElement("button", { key: v, onClick: () => setView(v), style: {
     padding: "0 12px",
     height: 54,
     borderRadius: 0,
@@ -3798,7 +3849,20 @@ function DispatcherApp({ session, onLogout }) {
     letterSpacing: "0.08em",
     transition: "color 0.15s, border-color 0.15s",
     whiteSpace: "nowrap"
-  } }, label, v === "sync" && syncFailing && /* @__PURE__ */ React.createElement("span", { style: { display: "inline-block", width: 7, height: 7, borderRadius: "50%", background: "var(--red)", marginLeft: 5, verticalAlign: "middle" } }))), /* @__PURE__ */ React.createElement("div", { style: { width: 1, height: 18, background: "var(--border-0)", margin: "0 8px" } }), /* @__PURE__ */ React.createElement("button", { onClick: () => clearSession(), style: { padding: "5px 10px", borderRadius: "var(--r)", border: "1px solid var(--border-0)", background: "transparent", color: "var(--text-2)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "var(--mono)", letterSpacing: "0.08em" } }, "EXIT"))), /* @__PURE__ */ React.createElement("nav", { role: "navigation", "aria-label": "Main navigation", className: "bottom-nav" }, [["booking", "BOOK"], ["dashboard", "DASH"], ["customers", "CUST"], ["templates", "TMPL"], ["drivers", "FLEET"], ["sync", "SYNC"], ["backup", "BAK"]].map(([v, label]) => /* @__PURE__ */ React.createElement("button", { key: v, onClick: () => setView(v), className: `bottom-nav-btn${view === v ? " active" : ""}`, "aria-label": v }, /* @__PURE__ */ React.createElement("span", null, label, v === "sync" && syncFailing && /* @__PURE__ */ React.createElement("span", { style: { display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "var(--red)", marginLeft: 4, verticalAlign: "middle" } })))), /* @__PURE__ */ React.createElement("button", { onClick: () => clearSession(), className: "bottom-nav-btn", "aria-label": "Sign out" }, /* @__PURE__ */ React.createElement("span", null, "EXIT"))), /* @__PURE__ */ React.createElement("main", { role: "main", "aria-label": "Dispatch HQ Application", className: "safe-main", style: { maxWidth: 980, margin: "0 auto", padding: "20px 16px" } }, !gdprDismissed && /* @__PURE__ */ React.createElement("div", { role: "alert", style: { padding: "14px 18px", borderRadius: 10, marginBottom: 20, background: "rgba(61,159,255,0.05)", border: "1px solid rgba(61,159,255,0.15)", display: "flex", alignItems: "flex-start", gap: 12 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 14, marginTop: 1 } }, "\u{1F512}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 13, fontWeight: 600, color: "var(--green)", marginBottom: 4, fontFamily: "var(--sans)" } }, "Privacy Notice"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, color: "var(--text-2)", lineHeight: 1.6 } }, "This app stores customer booking data on your device. Cloud Backup encrypts all data before transmission. AI Smart Fill sends booking text to Anthropic's API \u2014 don't include sensitive data beyond what's needed. Bookings auto-purge after 2 years.")), /* @__PURE__ */ React.createElement("button", { onClick: dismissGdpr, style: { padding: "5px 14px", borderRadius: 6, border: "none", background: "rgba(61,159,255,0.15)", color: "var(--green)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "var(--sans)", flexShrink: 0, whiteSpace: "nowrap" } }, "Got it")), view === "booking" && /* @__PURE__ */ React.createElement("div", { role: "form", "aria-label": "New booking form" }, /* @__PURE__ */ React.createElement("div", { className: "card-enter booking-form-mobile" }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h2", { style: { fontSize: 26, fontWeight: 800, color: "var(--text-1)", fontFamily: "var(--sans)", background: "var(--bg-0)", letterSpacing: "-0.01em" } }, editingBooking ? "EDIT BOOKING" : priceCheckMode ? "PRICE CHECK" : "NEW BOOKING"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 11, color: "var(--text-3)", fontFamily: "var(--mono)", letterSpacing: "0.12em", marginTop: 2 } }, (/* @__PURE__ */ new Date()).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }).toUpperCase())), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center" } }, !editingBooking && /* @__PURE__ */ React.createElement(
+  } }, label, v === "sync" && syncFailing && /* @__PURE__ */ React.createElement("span", { style: { display: "inline-block", width: 7, height: 7, borderRadius: "50%", background: "var(--red)", marginLeft: 5, verticalAlign: "middle" } }))), /* @__PURE__ */ React.createElement("div", { style: { width: 1, height: 18, background: "var(--border-0)", margin: "0 8px" } }), /* @__PURE__ */ React.createElement("button", { onClick: () => clearSession(), style: { padding: "5px 10px", borderRadius: "var(--r)", border: "1px solid var(--border-0)", background: "transparent", color: "var(--text-2)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "var(--mono)", letterSpacing: "0.08em" } }, "EXIT"))), /* @__PURE__ */ React.createElement("nav", { role: "navigation", "aria-label": "Main navigation", className: "bottom-nav" }, [["booking", "BOOK"], ["dashboard", "DASH"], ["archive", "ARCH"], ["customers", "CUST"], ["templates", "TMPL"], ["drivers", "FLEET"], ["sync", "SYNC"], ["backup", "BAK"]].map(([v, label]) => /* @__PURE__ */ React.createElement("button", { key: v, onClick: () => setView(v), className: `bottom-nav-btn${view === v ? " active" : ""}`, "aria-label": v }, /* @__PURE__ */ React.createElement("span", null, label, v === "sync" && syncFailing && /* @__PURE__ */ React.createElement("span", { style: { display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "var(--red)", marginLeft: 4, verticalAlign: "middle" } })))), /* @__PURE__ */ React.createElement("button", { onClick: () => clearSession(), className: "bottom-nav-btn", "aria-label": "Sign out" }, /* @__PURE__ */ React.createElement("span", null, "EXIT"))), /* @__PURE__ */ React.createElement("main", { role: "main", "aria-label": "Dispatch HQ Application", className: "safe-main", style: { maxWidth: 980, margin: "0 auto", padding: "20px 16px" } }, !gdprDismissed && /* @__PURE__ */ React.createElement("div", { role: "alert", style: { padding: "14px 18px", borderRadius: 10, marginBottom: 20, background: "rgba(61,159,255,0.05)", border: "1px solid rgba(61,159,255,0.15)", display: "flex", alignItems: "flex-start", gap: 12 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 14, marginTop: 1 } }, "\u{1F512}"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 13, fontWeight: 600, color: "var(--green)", marginBottom: 4, fontFamily: "var(--sans)" } }, "Privacy Notice"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, color: "var(--text-2)", lineHeight: 1.6 } }, "This app stores customer booking data on your device. Cloud Backup encrypts all data before transmission. AI Smart Fill sends booking text to Anthropic's API \u2014 don't include sensitive data beyond what's needed. Bookings auto-purge after 2 years.")), /* @__PURE__ */ React.createElement("button", { onClick: dismissGdpr, style: { padding: "5px 14px", borderRadius: 6, border: "none", background: "rgba(61,159,255,0.15)", color: "var(--green)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "var(--sans)", flexShrink: 0, whiteSpace: "nowrap" } }, "Got it")), exportNudge && bookings.length > 0 && /* @__PURE__ */ React.createElement("div", { style: {
+    background: "rgba(245,166,35,0.07)",
+    border: "1px solid rgba(245,166,35,0.25)",
+    borderRadius: 10,
+    margin: "0 0 12px",
+    padding: "8px 14px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+    flexWrap: "wrap",
+    fontSize: 12.5,
+    color: "var(--amber)"
+  } }, /* @__PURE__ */ React.createElement("span", null, "\u{1F4BE} Last backup export: ", exportNudge, " \u2014 keep an offline copy safe."), /* @__PURE__ */ React.createElement("button", { onClick: () => setView("backup"), style: { padding: "4px 12px", borderRadius: 6, border: "1px solid rgba(245,166,35,0.4)", background: "transparent", color: "var(--amber)", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" } }, "Export"), /* @__PURE__ */ React.createElement("button", { onClick: dismissExportNudge, title: "Dismiss for 24 hours", "aria-label": "Dismiss backup reminder", style: { padding: "4px 8px", borderRadius: 6, border: "none", background: "transparent", color: "var(--text-3)", fontSize: 12, cursor: "pointer", fontFamily: "inherit" } }, "\u2715")), view === "booking" && /* @__PURE__ */ React.createElement("div", { role: "form", "aria-label": "New booking form" }, /* @__PURE__ */ React.createElement("div", { className: "card-enter booking-form-mobile" }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h2", { style: { fontSize: 26, fontWeight: 800, color: "var(--text-1)", fontFamily: "var(--sans)", background: "var(--bg-0)", letterSpacing: "-0.01em" } }, editingBooking ? "EDIT BOOKING" : priceCheckMode ? "PRICE CHECK" : "NEW BOOKING"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 11, color: "var(--text-3)", fontFamily: "var(--mono)", letterSpacing: "0.12em", marginTop: 2 } }, (/* @__PURE__ */ new Date()).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }).toUpperCase())), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center" } }, !editingBooking && /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: () => {
@@ -4341,17 +4405,7 @@ function DispatcherApp({ session, onLogout }) {
     fontFamily: "var(--mono)",
     letterSpacing: "0.06em",
     flexShrink: 0
-  } }, "UNDO")), exportNudge && bookings.length > 0 && /* @__PURE__ */ React.createElement("div", { style: {
-    background: "rgba(245,166,35,0.07)",
-    borderBottom: "1px solid rgba(245,166,35,0.25)",
-    padding: "8px 14px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 12,
-    fontSize: 12.5,
-    color: "var(--amber)"
-  } }, /* @__PURE__ */ React.createElement("span", null, "\u{1F4BE} Last backup export: ", exportNudge, " \u2014 keep an offline copy safe."), /* @__PURE__ */ React.createElement("button", { onClick: () => setView("backup"), style: { padding: "4px 12px", borderRadius: 6, border: "1px solid rgba(245,166,35,0.4)", background: "transparent", color: "var(--amber)", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" } }, "Export"), /* @__PURE__ */ React.createElement("button", { onClick: dismissExportNudge, style: { padding: "4px 8px", borderRadius: 6, border: "none", background: "transparent", color: "var(--text-3)", fontSize: 12, cursor: "pointer", fontFamily: "inherit" } }, "\u2715")), showConfirm && /* @__PURE__ */ React.createElement(
+  } }, "UNDO")), showConfirm && /* @__PURE__ */ React.createElement(
     "div",
     {
       role: "dialog",
@@ -4644,7 +4698,134 @@ function DispatcherApp({ session, onLogout }) {
     fontWeight: 600,
     cursor: "pointer",
     fontFamily: "inherit"
-  } }, "Not Now \\u2014 I'll Type Instead")))), view === "templates" && /* @__PURE__ */ React.createElement("div", { style: { padding: "16px 16px 0" } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, fontWeight: 700, color: "var(--amber)", marginBottom: 14, letterSpacing: "0.1em", fontFamily: "var(--mono)" } }, "RECURRING TEMPLATES"), /* @__PURE__ */ React.createElement(TemplatesView, { onUseTemplate: handleUseTemplate })), view === "customers" && /* @__PURE__ */ React.createElement("div", { style: { padding: "16px 16px 0" } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, fontWeight: 700, color: "var(--green)", marginBottom: 14, letterSpacing: "0.1em", fontFamily: "var(--mono)" } }, "CUSTOMER HISTORY"), /* @__PURE__ */ React.createElement(CustomerHistoryView, { bookings })), view === "dashboard" && /* @__PURE__ */ React.createElement("div", { className: "card-enter" }, /* @__PURE__ */ React.createElement("h2", { style: { fontSize: 20, fontWeight: 700, color: "#fff", marginBottom: 16 } }, "\u{1F4CA} Bookings Dashboard"), (() => {
+  } }, "Not Now \\u2014 I'll Type Instead")))), view === "templates" && /* @__PURE__ */ React.createElement("div", { style: { padding: "16px 16px 0" } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, fontWeight: 700, color: "var(--amber)", marginBottom: 14, letterSpacing: "0.1em", fontFamily: "var(--mono)" } }, "RECURRING TEMPLATES"), /* @__PURE__ */ React.createElement(TemplatesView, { onUseTemplate: handleUseTemplate })), view === "archive" && /* @__PURE__ */ React.createElement("div", { style: { padding: "16px 16px 0" } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, fontWeight: 700, color: "var(--text-2)", marginBottom: 14, letterSpacing: "0.1em", fontFamily: "var(--mono)" } }, "\u{1F4DA} ARCHIVE \u2014 BOOKING HISTORY"), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(88px, 1fr))", gap: 8, marginBottom: 14 } }, [
+    { label: "TOTAL", value: archiveStats.total, color: "var(--text-1)" },
+    { label: "COMPLETED", value: archiveStats.past, color: "var(--green)" },
+    { label: "CANCELLED", value: archiveStats.cancelled, color: "#f85149" },
+    { label: "NO-SHOWS", value: archiveStats.noshow, color: "#f5a623" },
+    { label: "FEES", value: `$${archiveStats.fees}`, color: "#f85149" },
+    { label: "REVENUE", value: `$${archiveStats.revenue}`, color: "var(--amber)" }
+  ].map((s) => /* @__PURE__ */ React.createElement("div", { key: s.label, style: { background: "var(--bg-1)", border: "1px solid var(--border-1)", borderRadius: 10, padding: "10px 8px", textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 18, fontWeight: 800, color: s.color, fontFamily: "var(--mono)" } }, s.value), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 9, color: "var(--text-3)", fontFamily: "var(--mono)", letterSpacing: "0.08em", marginTop: 2 } }, s.label)))), /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      value: archiveSearch,
+      onChange: (e) => {
+        setArchiveSearch(e.target.value.slice(0, 200));
+        setArchivePage(100);
+      },
+      placeholder: "Search name, phone, driver, date, flight, address, reason...",
+      style: { ...inputStyle, marginBottom: 8 }
+    }
+  ), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" } }, [["all", "ALL"], ["past", "\u2705 COMPLETED"], ["cancelled", "\u274C CANCELLED"], ["noshow", "\u{1F47B} NO-SHOW"]].map(([v, label]) => /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      key: v,
+      onClick: () => {
+        setArchiveType(v);
+        setArchivePage(100);
+      },
+      style: {
+        padding: "6px 12px",
+        borderRadius: 8,
+        fontSize: 11,
+        fontWeight: 700,
+        fontFamily: "var(--mono)",
+        cursor: "pointer",
+        border: `1px solid ${archiveType === v ? "var(--green)" : "var(--border-1)"}`,
+        background: archiveType === v ? "rgba(76,175,106,0.1)" : "transparent",
+        color: archiveType === v ? "var(--green)" : "var(--text-3)"
+      }
+    },
+    label
+  ))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 14, alignItems: "center", flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      type: "date",
+      value: archiveFrom,
+      onChange: (e) => {
+        setArchiveFrom(e.target.value);
+        setArchivePage(100);
+      },
+      style: { ...inputStyle, flex: 1, minWidth: 130, padding: "8px 10px", fontSize: 13 },
+      "aria-label": "Archive from date"
+    }
+  ), /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-3)", fontSize: 12, fontFamily: "var(--mono)" } }, "\u2192"), /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      type: "date",
+      value: archiveTo,
+      onChange: (e) => {
+        setArchiveTo(e.target.value);
+        setArchivePage(100);
+      },
+      style: { ...inputStyle, flex: 1, minWidth: 130, padding: "8px 10px", fontSize: 13 },
+      "aria-label": "Archive to date"
+    }
+  ), (archiveSearch || archiveType !== "all" || archiveFrom || archiveTo) && /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => {
+        setArchiveSearch("");
+        setArchiveType("all");
+        setArchiveFrom("");
+        setArchiveTo("");
+        setArchivePage(100);
+      },
+      style: { padding: "8px 12px", borderRadius: 8, border: "1px solid var(--border-1)", background: "transparent", color: "var(--text-2)", fontSize: 12, cursor: "pointer", fontFamily: "var(--mono)" }
+    },
+    "CLEAR"
+  )), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 11, color: "var(--text-3)", fontFamily: "var(--mono)", marginBottom: 10 } }, archivedBookings.length, " record", archivedBookings.length === 1 ? "" : "s", archivedBookings.length > archivePage ? ` \xB7 showing ${archivePage}` : ""), archivedBookings.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", padding: "40px 20px", color: "var(--text-3)", fontSize: 13 } }, archiveStats.total === 0 ? "No history yet. Completed, cancelled, and no-show bookings will appear here." : "No records match these filters.") : archivedBookings.slice(0, archivePage).map((b) => /* @__PURE__ */ React.createElement("div", { key: b.id, style: {
+    background: "var(--bg-1)",
+    border: "1px solid var(--border-1)",
+    borderRadius: 10,
+    padding: "12px 14px",
+    marginBottom: 6,
+    borderLeft: `3px solid ${b._archiveType === "noshow" ? "#f5a623" : b._archiveType === "cancelled" ? "#f85149" : "var(--green)"}`
+  } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 6, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: {
+    fontSize: 10,
+    fontFamily: "var(--mono)",
+    padding: "2px 7px",
+    borderRadius: 4,
+    fontWeight: 700,
+    background: b._archiveType === "noshow" ? "rgba(245,166,35,0.12)" : b._archiveType === "cancelled" ? "rgba(248,81,73,0.12)" : "rgba(76,175,106,0.12)",
+    color: b._archiveType === "noshow" ? "#f5a623" : b._archiveType === "cancelled" ? "#f85149" : "var(--green)"
+  } }, b._archiveType === "noshow" ? "\u{1F47B} NO-SHOW" : b._archiveType === "cancelled" ? "\u274C CANCELLED" : "\u2705 COMPLETED"), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 14, fontWeight: 700, color: "var(--text-1)", fontFamily: "var(--mono)" } }, b.date), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "var(--green)", fontFamily: "var(--mono)" } }, b.timeSlot), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "var(--text-3)", fontFamily: "var(--mono)" } }, "#", b.driverNumber || "\u2013"), b.cancelIsRebook && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontFamily: "var(--mono)", padding: "2px 7px", borderRadius: 4, background: "rgba(77,159,255,0.12)", color: "#4d9fff", fontWeight: 700 } }, "\u{1F504} REBOOK"), b.cancelFee > 0 && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontFamily: "var(--mono)", padding: "2px 7px", borderRadius: 4, background: "rgba(248,81,73,0.12)", color: "#f85149", fontWeight: 700 } }, "$", b.cancelFee, " fee")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 3, flexShrink: 0 } }, b.status && /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => handleRestoreBooking(b.id),
+      title: "Restore to active bookings",
+      "aria-label": "Restore to active bookings",
+      style: { padding: "5px 9px", borderRadius: 6, border: "1px solid rgba(76,175,106,0.3)", background: "transparent", color: "var(--green)", fontSize: 12, cursor: "pointer" }
+    },
+    "\u21A9\uFE0F"
+  ), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => editBooking(b),
+      title: "Edit booking",
+      "aria-label": "Edit booking",
+      style: { padding: "5px 9px", borderRadius: 6, border: "1px solid #1c2035", background: "transparent", color: "var(--text-2)", fontSize: 12, cursor: "pointer" }
+    },
+    "\u270F\uFE0F"
+  ), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => deleteBooking(b.id),
+      title: "Delete permanently",
+      "aria-label": "Delete permanently",
+      style: { padding: "5px 9px", borderRadius: 6, border: "1px solid rgba(220,38,38,0.2)", background: "transparent", color: "#ef4444", fontSize: 12, cursor: "pointer" }
+    },
+    "\u{1F5D1}"
+  ))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 600, color: "var(--text-1)" } }, b.customerName), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--text-2)", fontFamily: "var(--mono)", marginTop: 2 } }, b.phone || "\u2013"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--text-3)", marginTop: 4 } }, /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-2)" } }, b.pickupAddress || "\u2013"), /* @__PURE__ */ React.createElement("span", { style: { color: "var(--border-1)", margin: "0 6px" } }, "\u2192"), /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-2)" } }, b.dropoffAddress || "\u2013")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 6, gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "var(--text-3)", fontFamily: "var(--mono)" } }, b.airline ? `\u2708 ${b.airline} ${b.flightNumber} \xB7 ` : "", b.passengers, "p \xB7 ", b.luggage, "b \xB7 ", b.tripType === "round-trip" ? "RT" : "OW", b.cancelReason ? ` \xB7 reason: ${b.cancelReason}` : ""), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 14, fontWeight: 700, color: "var(--amber)", fontFamily: "var(--mono)" } }, b.paymentAmount ? `$${b.paymentAmount}` : "\u2013")))), archivedBookings.length > archivePage && /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => setArchivePage((p) => p + 100),
+      style: { width: "100%", padding: "12px", borderRadius: 10, border: "1px solid var(--border-1)", background: "transparent", color: "var(--text-2)", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "var(--mono)", marginTop: 6, marginBottom: 14 }
+    },
+    "LOAD 100 MORE (",
+    archivedBookings.length - archivePage,
+    " remaining)"
+  )), view === "customers" && /* @__PURE__ */ React.createElement("div", { style: { padding: "16px 16px 0" } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, fontWeight: 700, color: "var(--green)", marginBottom: 14, letterSpacing: "0.1em", fontFamily: "var(--mono)" } }, "CUSTOMER HISTORY"), /* @__PURE__ */ React.createElement(CustomerHistoryView, { bookings })), view === "dashboard" && /* @__PURE__ */ React.createElement("div", { className: "card-enter" }, /* @__PURE__ */ React.createElement("h2", { style: { fontSize: 20, fontWeight: 700, color: "#fff", marginBottom: 16 } }, "\u{1F4CA} Bookings Dashboard"), (() => {
     const now = /* @__PURE__ */ new Date();
     const weekStart = new Date(now);
     weekStart.setDate(now.getDate() - now.getDay());
@@ -4775,14 +4956,21 @@ function DispatcherApp({ session, onLogout }) {
         specialShifts: [],
         airportPickup: dForm.airportPickup,
         airportDropoff: dForm.airportDropoff,
-        notes: dForm.notes.trim(),
+        notes: sanitize(dForm.notes, 200),
         custom: true
       };
       saveCustom([...customDrivers, d]);
       setShowAddDriver(false);
       setDForm({ id: "", shiftStart: "06:00", shiftEnd: "18:00", daysOff: "", monthlyOff: "", airportPickup: false, airportDropoff: false, notes: "" });
     };
-    return /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 13, color: "var(--text-2)" } }, DRIVERS.length + customDrivers.length, " registered drivers"), /* @__PURE__ */ React.createElement("button", { onClick: () => setShowAddDriver((v) => !v), style: { padding: "7px 14px", borderRadius: 8, border: "1px solid #ff3a30", background: showAddDriver ? "rgba(76,175,106,0.08)" : "transparent", color: "var(--green)", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" } }, showAddDriver ? "\u2715 Cancel" : "+ Add Driver")), showAddDriver && /* @__PURE__ */ React.createElement("div", { style: { background: "var(--bg-1)", border: "1px solid var(--border-1)", borderRadius: 12, padding: 16, marginBottom: 14 } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, fontWeight: 700, color: "var(--green)", marginBottom: 12 } }, "New Driver"), dFormErr && /* @__PURE__ */ React.createElement("p", { style: { color: "var(--red)", fontSize: 13, marginBottom: 8 } }, dFormErr), /* @__PURE__ */ React.createElement("div", { className: "resp-grid-2", style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Driver #"), /* @__PURE__ */ React.createElement("input", { type: "number", min: "1", max: "99", value: dForm.id, onChange: (e) => setDForm((p) => ({ ...p, id: e.target.value })), style: inputStyle, placeholder: "e.g. 25" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Notes"), /* @__PURE__ */ React.createElement("input", { type: "text", value: dForm.notes, onChange: (e) => setDForm((p) => ({ ...p, notes: e.target.value })), style: inputStyle, placeholder: "Full time, PM shift..." })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Shift Start"), /* @__PURE__ */ React.createElement("input", { type: "time", value: dForm.shiftStart, onChange: (e) => setDForm((p) => ({ ...p, shiftStart: e.target.value })), style: inputStyle })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Shift End"), /* @__PURE__ */ React.createElement("input", { type: "time", value: dForm.shiftEnd, onChange: (e) => setDForm((p) => ({ ...p, shiftEnd: e.target.value })), style: inputStyle })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Days Off (comma-separated)"), /* @__PURE__ */ React.createElement("input", { type: "text", value: dForm.daysOff, onChange: (e) => setDForm((p) => ({ ...p, daysOff: e.target.value })), style: inputStyle, placeholder: "Sunday, Thursday" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Monthly Off Dates"), /* @__PURE__ */ React.createElement("input", { type: "text", value: dForm.monthlyOff, onChange: (e) => setDForm((p) => ({ ...p, monthlyOff: e.target.value })), style: inputStyle, placeholder: "9, 19, 29" }))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 20, marginBottom: 12 } }, /* @__PURE__ */ React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--text-2)", cursor: "pointer" } }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: dForm.airportPickup, onChange: (e) => setDForm((p) => ({ ...p, airportPickup: e.target.checked })) }), " Airport Pickup"), /* @__PURE__ */ React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--text-2)", cursor: "pointer" } }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: dForm.airportDropoff, onChange: (e) => setDForm((p) => ({ ...p, airportDropoff: e.target.checked })) }), " Airport Dropoff")), /* @__PURE__ */ React.createElement("button", { onClick: addDriver, style: { padding: "9px 20px", borderRadius: 8, border: "none", background: "linear-gradient(135deg,#1a5a2a,#1a7a3a)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" } }, "Save Driver")), customDrivers.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { padding: "8px 12px", background: "rgba(255,200,50,0.04)", border: "1px solid #2a2010", borderRadius: 8, marginBottom: 12, fontSize: 12, color: "#886a30", display: "flex", alignItems: "center", justifyContent: "space-between" } }, /* @__PURE__ */ React.createElement("span", null, "\u26A0\uFE0F ", customDrivers.length, " custom driver(s) \u2014 stored locally. Add to DRIVERS array in source to make permanent."), /* @__PURE__ */ React.createElement("button", { onClick: () => saveCustom([]), style: { background: "transparent", border: "none", color: "var(--red)", fontSize: 12, cursor: "pointer", fontFamily: "inherit", marginLeft: 12 } }, "Remove all")));
+    return /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 13, color: "var(--text-2)" } }, DRIVERS.length + customDrivers.length, " registered drivers"), /* @__PURE__ */ React.createElement("button", { onClick: () => setShowAddDriver((v) => !v), style: { padding: "7px 14px", borderRadius: 8, border: "1px solid #ff3a30", background: showAddDriver ? "rgba(76,175,106,0.08)" : "transparent", color: "var(--green)", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" } }, showAddDriver ? "\u2715 Cancel" : "+ Add Driver")), showAddDriver && /* @__PURE__ */ React.createElement("div", { style: { background: "var(--bg-1)", border: "1px solid var(--border-1)", borderRadius: 12, padding: 16, marginBottom: 14 } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, fontWeight: 700, color: "var(--green)", marginBottom: 12 } }, "New Driver"), dFormErr && /* @__PURE__ */ React.createElement("p", { style: { color: "var(--red)", fontSize: 13, marginBottom: 8 } }, dFormErr), /* @__PURE__ */ React.createElement("div", { className: "resp-grid-2", style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Driver #"), /* @__PURE__ */ React.createElement("input", { type: "number", min: "1", max: "99", value: dForm.id, onChange: (e) => setDForm((p) => ({ ...p, id: e.target.value })), style: inputStyle, placeholder: "e.g. 25" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Notes"), /* @__PURE__ */ React.createElement("input", { type: "text", value: dForm.notes, onChange: (e) => setDForm((p) => ({ ...p, notes: e.target.value })), style: inputStyle, placeholder: "Full time, PM shift..." })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Shift Start"), /* @__PURE__ */ React.createElement("input", { type: "time", value: dForm.shiftStart, onChange: (e) => setDForm((p) => ({ ...p, shiftStart: e.target.value })), style: inputStyle })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Shift End"), /* @__PURE__ */ React.createElement("input", { type: "time", value: dForm.shiftEnd, onChange: (e) => setDForm((p) => ({ ...p, shiftEnd: e.target.value })), style: inputStyle })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Days Off (comma-separated)"), /* @__PURE__ */ React.createElement("input", { type: "text", value: dForm.daysOff, onChange: (e) => setDForm((p) => ({ ...p, daysOff: e.target.value })), style: inputStyle, placeholder: "Sunday, Thursday" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Monthly Off Dates"), /* @__PURE__ */ React.createElement("input", { type: "text", value: dForm.monthlyOff, onChange: (e) => setDForm((p) => ({ ...p, monthlyOff: e.target.value })), style: inputStyle, placeholder: "9, 19, 29" }))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 20, marginBottom: 12 } }, /* @__PURE__ */ React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--text-2)", cursor: "pointer" } }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: dForm.airportPickup, onChange: (e) => setDForm((p) => ({ ...p, airportPickup: e.target.checked })) }), " Airport Pickup"), /* @__PURE__ */ React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--text-2)", cursor: "pointer" } }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: dForm.airportDropoff, onChange: (e) => setDForm((p) => ({ ...p, airportDropoff: e.target.checked })) }), " Airport Dropoff")), /* @__PURE__ */ React.createElement("button", { onClick: addDriver, style: { padding: "9px 20px", borderRadius: 8, border: "none", background: "linear-gradient(135deg,#1a5a2a,#1a7a3a)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" } }, "Save Driver")), customDrivers.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { padding: "8px 12px", background: "rgba(255,200,50,0.04)", border: "1px solid #2a2010", borderRadius: 8, marginBottom: 12, fontSize: 12, color: "#886a30", display: "flex", alignItems: "center", justifyContent: "space-between" } }, /* @__PURE__ */ React.createElement("span", null, "\u26A0\uFE0F ", customDrivers.length, " custom driver(s) \u2014 stored locally. Add to DRIVERS array in source to make permanent."), (() => {
+      const customIds = new Set(customDrivers.map((d) => d.id));
+      const affected = bookings.filter((b) => customIds.has(b.driverNumber)).length;
+      return wipeDriversConfirm ? /* @__PURE__ */ React.createElement("span", { style: { display: "flex", alignItems: "center", gap: 8, marginLeft: 12, flexShrink: 0 } }, /* @__PURE__ */ React.createElement("span", { style: { color: "var(--red)", fontSize: 11 } }, "Delete all ", customDrivers.length, "?", affected > 0 ? ` ${affected} booking(s) keep their number but lose schedule info.` : ""), /* @__PURE__ */ React.createElement("button", { onClick: () => {
+        saveCustom([]);
+        setWipeDriversConfirm(false);
+      }, style: { background: "transparent", border: "1px solid rgba(220,38,38,0.4)", borderRadius: 6, padding: "3px 10px", color: "var(--red)", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" } }, "Yes, delete"), /* @__PURE__ */ React.createElement("button", { onClick: () => setWipeDriversConfirm(false), style: { background: "transparent", border: "1px solid var(--border-1)", borderRadius: 6, padding: "3px 10px", color: "var(--text-2)", fontSize: 11, cursor: "pointer", fontFamily: "inherit" } }, "Cancel")) : /* @__PURE__ */ React.createElement("button", { onClick: () => setWipeDriversConfirm(true), title: "Remove all custom drivers", "aria-label": "Remove all custom drivers", style: { background: "transparent", border: "none", color: "var(--red)", fontSize: 12, cursor: "pointer", fontFamily: "inherit", marginLeft: 12, flexShrink: 0 } }, "Remove all");
+    })()));
   })(), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, DRIVERS.map((d) => {
     const shift = getShiftLabel(d);
     return /* @__PURE__ */ React.createElement("div", { key: d.id, style: { background: "var(--bg-1)", border: "1px solid #1e2028", borderRadius: 12, padding: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 6 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 20, fontWeight: 800, color: "var(--green)", fontFamily: "inherit" } }, "#", d.id), d.name && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 14, fontWeight: 700, color: "#fff" } }, d.name), /* @__PURE__ */ React.createElement(Badge, { label: shift, ok: true, neutral: true }), d.airportPickup && /* @__PURE__ */ React.createElement(Badge, { label: "\u2708 PU", ok: true }), d.airportDropoff && /* @__PURE__ */ React.createElement(Badge, { label: "\u2708 DO", ok: true }), !d.airportPickup && !d.airportDropoff && /* @__PURE__ */ React.createElement(Badge, { label: "No Airport", ok: false })), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, fontSize: 13 } }, d.carType && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-2)" } }, "\u{1F697} ", d.carType), d.phone && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-2)" } }, "\u{1F4DE} ", d.phone), /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-2)" } }, "Shift: ", /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-2)" } }, formatShiftDisplay(d.shiftStart, d.shiftEnd))), /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-2)" } }, "Days Off: ", /* @__PURE__ */ React.createElement("span", { style: { color: d.daysOff.length ? "var(--red)" : "var(--green)" } }, d.daysOff.length ? d.daysOff.join(", ") : "None"))), d.monthlyOff && /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, color: "var(--text-2)", fontWeight: 500, marginTop: 4 } }, "Monthly off: ", d.monthlyOff.join(", "), "th"), d.specialShifts && /* @__PURE__ */ React.createElement("p", { style: { fontSize: 13, color: "#ca8", marginTop: 4 } }, "Special: ", d.specialShifts.map((s) => `${s.day} ${formatShiftDisplay(s.start, s.end)}`).join(", ")), d.notes && /* @__PURE__ */ React.createElement("p", { style: { fontSize: 13, color: "#f96", marginTop: 4 } }, "\u{1F4CC} ", d.notes));
