@@ -2219,7 +2219,7 @@ function CustomerHistoryView({ bookings }) {
       placeholder: "Name, phone number, or address...",
       style: { width: "100%", padding: "11px 14px", borderRadius: 10, border: "1.5px solid var(--amber)", background: "#fff", color: "#1a0a00", fontFamily: "var(--mono)", fontSize: 14, fontWeight: 600, outline: "none", boxSizing: "border-box" }
     }
-  )), /* @__PURE__ */ React.createElement("div", { style: { ...cardStyle, marginBottom: 14, background: "var(--bg-3)" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { ...monoXs, color: "var(--text-3)", marginBottom: 4 } }, "TOTAL CUSTOMERS"), /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--mono)", fontWeight: 700, fontSize: 22, color: "var(--amber)" } }, profiles.length)), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { ...monoXs, color: "var(--text-3)", marginBottom: 4 } }, "TOTAL BOOKINGS"), /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--mono)", fontWeight: 700, fontSize: 22, color: "var(--green)" } }, bookings.length)), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { ...monoXs, color: "var(--text-3)", marginBottom: 4 } }, "TOTAL REVENUE"), /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--mono)", fontWeight: 700, fontSize: 22, color: "var(--blue,#4d9fff)" } }, "$", bookings.reduce((s, b) => s + (parseFloat(b.paymentAmount) || 0), 0).toFixed(0))))), /* @__PURE__ */ React.createElement("div", { style: { ...monoXs, color: "var(--text-3)", marginBottom: 8 } }, query ? `${filtered.length} result${filtered.length !== 1 ? "s" : ""}` : `ALL CUSTOMERS \xB7 ${filtered.length} total`), filtered.length === 0 && /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", color: "var(--text-3)", fontFamily: "var(--mono)", fontSize: 12, padding: 32 } }, query ? "No customers found matching your search" : "No customer history yet \u2014 bookings will appear here"), filtered.map((p, i) => /* @__PURE__ */ React.createElement(
+  )), /* @__PURE__ */ React.createElement("div", { style: { ...cardStyle, marginBottom: 14, background: "var(--bg-3)" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { ...monoXs, color: "var(--text-3)", marginBottom: 4 } }, "TOTAL CUSTOMERS"), /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--mono)", fontWeight: 700, fontSize: 22, color: "var(--amber)" } }, profiles.length)), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { ...monoXs, color: "var(--text-3)", marginBottom: 4 } }, "TOTAL BOOKINGS"), /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--mono)", fontWeight: 700, fontSize: 22, color: "var(--green)" } }, bookings.length)), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { ...monoXs, color: "var(--text-3)", marginBottom: 4 } }, "TOTAL REVENUE"), /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--mono)", fontWeight: 700, fontSize: 22, color: "var(--blue,#4d9fff)" } }, "$", bookings.filter((b) => !b.status).reduce((s, b) => s + (parseFloat(b.paymentAmount) || 0), 0).toFixed(0))))), /* @__PURE__ */ React.createElement("div", { style: { ...monoXs, color: "var(--text-3)", marginBottom: 8 } }, query ? `${filtered.length} result${filtered.length !== 1 ? "s" : ""}` : `ALL CUSTOMERS \xB7 ${filtered.length} total`), filtered.length === 0 && /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", color: "var(--text-3)", fontFamily: "var(--mono)", fontSize: 12, padding: 32 } }, query ? "No customers found matching your search" : "No customer history yet \u2014 bookings will appear here"), filtered.map((p, i) => /* @__PURE__ */ React.createElement(
     "div",
     {
       key: p.phone + i,
@@ -2407,7 +2407,6 @@ function DispatcherApp({ session, onLogout }) {
   };
   const [cancelModal, setCancelModal] = useState(null);
   const [cancelReason, setCancelReason] = useState("");
-  const [cancelledOpen, setCancelledOpen] = useState(false);
   const [formError, setFormError] = useState("");
   const [missingFields, setMissingFields] = useState([]);
   useEffect(() => {
@@ -2642,11 +2641,11 @@ function DispatcherApp({ session, onLogout }) {
     });
   }, []);
   const handleBulkSelectAll = useCallback(() => {
-    const active = bookings.filter((b) => !b.status);
+    const active = bookings.filter((b) => !b.status && !isFinishedBooking(b, nowTs));
     setBulkSelected(
       (prev) => prev.size === active.length ? /* @__PURE__ */ new Set() : new Set(active.map((b) => b.id))
     );
-  }, [bookings]);
+  }, [nowTs, bookings]);
   const handleBulkReassign = useCallback(() => {
     if (!bulkToDriver || bulkSelected.size === 0) return;
     setBookings((prev) => prev.map(
@@ -3844,7 +3843,7 @@ function DispatcherApp({ session, onLogout }) {
   const bookedDrivers = useMemo(() => {
     if (!form.date || !form.timeSlot) return /* @__PURE__ */ new Set();
     const booked = /* @__PURE__ */ new Set();
-    bookings.filter((b) => !b.deleted && b.date === form.date && b.timeSlot === form.timeSlot).forEach((b) => {
+    bookings.filter((b) => !b.deleted && !b.status && b.date === form.date && b.timeSlot === form.timeSlot).forEach((b) => {
       if (b.driverNumber && (!editingBooking || b.id !== editingBooking.id)) booked.add(b.driverNumber);
     });
     return booked;
@@ -4927,7 +4926,7 @@ function DispatcherApp({ session, onLogout }) {
     weekStart.setDate(now.getDate() - now.getDay());
     weekStart.setHours(0, 0, 0, 0);
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const active = bookings.filter((b) => !b.deleted);
+    const active = bookings.filter((b) => !b.deleted && !b.status);
     const fares = active.map((b) => parseFloat(b.paymentAmount) || 0);
     const weekFares = active.filter((b) => /* @__PURE__ */ new Date(b.date + "T12:00:00") >= weekStart).map((b) => parseFloat(b.paymentAmount) || 0);
     const monthFares = active.filter((b) => /* @__PURE__ */ new Date(b.date + "T12:00:00") >= monthStart).map((b) => parseFloat(b.paymentAmount) || 0);
@@ -5005,26 +5004,28 @@ function DispatcherApp({ session, onLogout }) {
       },
       "NEXT \u2192"
     )));
-  })(), /* @__PURE__ */ React.createElement(BookingSection, { title: "\u{1F4C5} Weekdays (Mon\u2013Fri)", bookings: groupedBookings.weekday, onEdit: editBooking, onDelete: deleteBooking, onCancelModal: handleCancelModal, bulkMode, bulkSelected, onBulkToggle: handleBulkToggle }), /* @__PURE__ */ React.createElement(BookingSection, { title: "\u{1F334} Weekends (Sat\u2013Sun)", bookings: groupedBookings.weekend, onEdit: editBooking, onDelete: deleteBooking, onCancelModal: handleCancelModal, bulkMode, bulkSelected, onBulkToggle: handleBulkToggle }), (() => {
-    const cancelled = bookings.filter((b) => b.status === "cancelled" || b.status === "noshow");
-    if (cancelled.length === 0) return null;
-    return /* @__PURE__ */ React.createElement("div", { style: { marginTop: 24 } }, /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        onClick: () => setCancelledOpen((o) => !o),
-        style: { width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: "rgba(248,81,73,0.06)", border: "1px solid rgba(248,81,73,0.2)", borderRadius: 10, cursor: "pointer", marginBottom: cancelledOpen ? 8 : 0 }
+  })(), /* @__PURE__ */ React.createElement(BookingSection, { title: "\u{1F4C5} Weekdays (Mon\u2013Fri)", bookings: groupedBookings.weekday, onEdit: editBooking, onDelete: deleteBooking, onCancelModal: handleCancelModal, bulkMode, bulkSelected, onBulkToggle: handleBulkToggle }), /* @__PURE__ */ React.createElement(BookingSection, { title: "\u{1F334} Weekends (Sat\u2013Sun)", bookings: groupedBookings.weekend, onEdit: editBooking, onDelete: deleteBooking, onCancelModal: handleCancelModal, bulkMode, bulkSelected, onBulkToggle: handleBulkToggle }), archiveStats.total > 0 && /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => setView("archive"),
+      style: {
+        width: "100%",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        padding: "10px 14px",
+        background: "transparent",
+        border: "1px solid var(--border-0)",
+        borderRadius: 10,
+        cursor: "pointer",
+        marginTop: 24,
+        fontFamily: "var(--mono)"
       },
-      /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: "#f85149", fontFamily: "var(--mono)" } }, "CANCELLED & NO-SHOWS"), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, padding: "2px 8px", borderRadius: 10, background: "rgba(248,81,73,0.15)", color: "#f85149", fontFamily: "var(--mono)", fontWeight: 700 } }, cancelled.length)),
-      /* @__PURE__ */ React.createElement("span", { style: { color: "#f85149", fontSize: 12, fontFamily: "var(--mono)" } }, cancelledOpen ? "\u25B2 HIDE" : "\u25BC SHOW")
-    ), cancelledOpen && cancelled.sort((a, b) => (b.cancelledAt || "").localeCompare(a.cancelledAt || "")).map((b) => /* @__PURE__ */ React.createElement("div", { key: b.id, style: { background: "var(--bg-1)", border: "1px solid rgba(248,81,73,0.15)", borderRadius: 10, padding: "12px 14px", marginBottom: 6, borderLeft: `3px solid ${b.status === "noshow" ? "#f5a623" : "#f85149"}` } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 5 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontFamily: "var(--mono)", padding: "2px 7px", borderRadius: 4, background: b.status === "noshow" ? "rgba(245,166,35,0.12)" : "rgba(248,81,73,0.12)", color: b.status === "noshow" ? "#f5a623" : "#f85149", fontWeight: 700 } }, b.status === "noshow" ? "\u{1F47B} NO-SHOW" : "\u274C CANCELLED"), b.cancelIsRebook && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontFamily: "var(--mono)", padding: "2px 7px", borderRadius: 4, background: "rgba(77,159,255,0.12)", color: "#4d9fff", fontWeight: 700 } }, "\u{1F504} REBOOK"), b.cancelFee > 0 && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontFamily: "var(--mono)", padding: "2px 7px", borderRadius: 4, background: "rgba(248,81,73,0.12)", color: "#f85149", fontWeight: 700 } }, "$", b.cancelFee, " fee"), b.cancelFreeOfCharge && !b.cancelIsRebook && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontFamily: "var(--mono)", padding: "2px 7px", borderRadius: 4, background: "rgba(52,208,88,0.12)", color: "#34d058", fontWeight: 700 } }, "FREE")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: "var(--text-1)", fontFamily: "var(--mono)" } }, b.customerName), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--text-3)", fontFamily: "var(--mono)", marginTop: 2 } }, b.date, " \xB7 ", b.timeSlot, " \xB7 Driver ", b.driverNumber), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--text-3)", fontFamily: "var(--mono)", marginTop: 2 } }, b.pickupAddress, " \u2192 ", b.dropoffAddress), b.cancelReason && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--text-3)", fontFamily: "var(--mono)", marginTop: 4, fontStyle: "italic" } }, "\u21B3 ", { "no-show": "Customer did not appear", "flight-delay": "Flight delayed / rescheduled", "rebook": "Rebooked for different time", "weather": "Weather conditions", "emergency": "Emergency situation", "circumstances": "Customer's circumstances" }[b.cancelReason] || b.cancelReason), b.cancelledAt && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--text-3)", fontFamily: "var(--mono)", marginTop: 2, opacity: 0.6 } }, "Recorded ", b.cancelledAt)), /* @__PURE__ */ React.createElement("div", { style: { textAlign: "right", marginLeft: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 700, fontFamily: "var(--mono)", color: b.cancelFee > 0 ? "#f5a623" : "var(--text-3)" } }, b.cancelFee > 0 ? `$${b.cancelFee}` : `$${b.paymentAmount || "\u2014"}`))), /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        onClick: () => handleRestoreBooking(b.id),
-        style: { fontSize: 11, fontFamily: "var(--mono)", padding: "5px 12px", borderRadius: 6, border: "1px solid rgba(52,208,88,0.2)", background: "transparent", color: "var(--green)", cursor: "pointer" }
-      },
-      "\u21A9 Restore to Active"
-    ))));
-  })(), filteredBookings.length > dashPage && /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", padding: "16px 0" } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setDashPage((p) => p + 50), style: { padding: "9px 24px", borderRadius: 8, border: "1px solid var(--border-1)", background: "transparent", color: "var(--text-2)", fontSize: 14, cursor: "pointer", fontFamily: "inherit" } }, "Load more (", filteredBookings.length - dashPage, " remaining)")), filteredBookings.length === 0 && /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", padding: 48, color: "#909aaa" } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 36 } }, "\u{1F4ED}"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 15, marginTop: 8 } }, "No bookings found"))), view === "drivers" && /* @__PURE__ */ React.createElement("div", { className: "card-enter" }, /* @__PURE__ */ React.createElement("h2", { style: { fontSize: 20, fontWeight: 700, color: "var(--text-1)", marginBottom: 16 } }, "Driver Database"), /* @__PURE__ */ React.createElement("div", { style: { background: "var(--bg-0)", border: "1px solid var(--border-0)", borderRadius: 10, padding: 14, marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap", marginBottom: 10 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, letterSpacing: "0.1em", color: "var(--green)", fontWeight: 700, fontFamily: "var(--mono)" } }, "ON SHIFT NOW \xB7 ", new Date(nowTs).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, letterSpacing: "0.06em", color: "var(--text-3)", fontFamily: "var(--mono)" } }, fleetNow.onShift.length, " ON \xB7 ", fleetNow.offShift.length, " OFF-HOURS \xB7 ", fleetNow.offToday.length, " OFF TODAY")), fleetNow.onShift.length === 0 ? /* @__PURE__ */ React.createElement("p", { style: { fontSize: 13, color: "var(--text-3)", margin: 0 } }, "No drivers on shift right now.") : /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } }, fleetNow.onShift.map(({ driver, shift, load }) => /* @__PURE__ */ React.createElement(
+      title: "Open the archive"
+    },
+    /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "var(--text-2)", letterSpacing: "0.06em" } }, "\u{1F4DA} ARCHIVE \xB7 ", archiveStats.past, " COMPLETED \xB7 ", archiveStats.cancelled, " CANCELLED \xB7 ", archiveStats.noshow, " NO-SHOW"),
+    /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "var(--green)", letterSpacing: "0.06em" } }, "VIEW \u2192")
+  ), filteredBookings.length > dashPage && /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", padding: "16px 0" } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setDashPage((p) => p + 50), style: { padding: "9px 24px", borderRadius: 8, border: "1px solid var(--border-1)", background: "transparent", color: "var(--text-2)", fontSize: 14, cursor: "pointer", fontFamily: "inherit" } }, "Load more (", filteredBookings.length - dashPage, " remaining)")), filteredBookings.length === 0 && /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", padding: 48, color: "#909aaa" } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 36 } }, "\u{1F4ED}"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 15, marginTop: 8 } }, "No bookings found"))), view === "drivers" && /* @__PURE__ */ React.createElement("div", { className: "card-enter" }, /* @__PURE__ */ React.createElement("h2", { style: { fontSize: 20, fontWeight: 700, color: "var(--text-1)", marginBottom: 16 } }, "Driver Database"), /* @__PURE__ */ React.createElement("div", { style: { background: "var(--bg-0)", border: "1px solid var(--border-0)", borderRadius: 10, padding: 14, marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap", marginBottom: 10 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, letterSpacing: "0.1em", color: "var(--green)", fontWeight: 700, fontFamily: "var(--mono)" } }, "ON SHIFT NOW \xB7 ", new Date(nowTs).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, letterSpacing: "0.06em", color: "var(--text-3)", fontFamily: "var(--mono)" } }, fleetNow.onShift.length, " ON \xB7 ", fleetNow.offShift.length, " OFF-HOURS \xB7 ", fleetNow.offToday.length, " OFF TODAY")), fleetNow.onShift.length === 0 ? /* @__PURE__ */ React.createElement("p", { style: { fontSize: 13, color: "var(--text-3)", margin: 0 } }, "No drivers on shift right now.") : /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } }, fleetNow.onShift.map(({ driver, shift, load }) => /* @__PURE__ */ React.createElement(
     "div",
     {
       key: driver.id,
@@ -5691,7 +5692,7 @@ function AdminDashboard({ currentUser, endpointUrl, onSignOut }) {
   })()));
 }
 function normalizeSpokenNumbers(text) {
-  if (!text) return "";
+  if (!text || typeof text !== "string") return "";
   let t = text.trim();
   t = t.replace(/\bwon\b/gi, "one");
   t = t.replace(/\btoo\b(?=\s+(?:zero|oh|one|two|three|four|five|six|seven|eight|nine|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand))/gi, "two");
