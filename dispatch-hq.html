@@ -1604,6 +1604,29 @@ const DRIVERS = [
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const AM_SLOTS = ["4:00 AM", "4:30 AM", "5:00 AM", "5:30 AM", "6:00 AM", "6:30 AM", "7:00 AM", "7:30 AM", "8:00 AM", "8:30 AM", "9:00 AM", "9:30 AM", "10:00 AM", "10:30 AM", "11:00 AM", "11:30 AM"];
 const PM_SLOTS = ["12:00 PM", "12:30 PM", "1:00 PM", "1:30 PM", "2:00 PM", "2:30 PM", "3:00 PM", "3:30 PM", "4:00 PM", "4:30 PM", "5:00 PM", "5:30 PM", "6:00 PM", "6:30 PM", "7:00 PM", "7:30 PM", "8:00 PM", "8:30 PM", "9:00 PM", "9:30 PM", "10:00 PM", "10:30 PM", "11:00 PM", "11:30 PM"];
+const COMPLETION_GRACE_MS = 2 * 60 * 60 * 1e3;
+function getBookingTime(b) {
+  if (!b || typeof b.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(b.date)) return null;
+  const parts = b.date.split("-");
+  const y = parseInt(parts[0], 10), mo = parseInt(parts[1], 10) - 1, d = parseInt(parts[2], 10);
+  let hh = 12, mm = 0;
+  if (typeof b.timeSlot === "string" && b.timeSlot) {
+    const t24 = formatTime24(b.timeSlot);
+    const hp = parseInt(t24.split(":")[0], 10), mp = parseInt(t24.split(":")[1], 10);
+    if (!isNaN(hp) && !isNaN(mp)) {
+      hh = hp;
+      mm = mp;
+    }
+  }
+  const dt = new Date(y, mo, d, hh, mm, 0, 0);
+  return isNaN(dt.getTime()) ? null : dt;
+}
+function isFinishedBooking(b, nowMs) {
+  if (!b || b.status) return false;
+  const dt = getBookingTime(b);
+  if (!dt) return false;
+  return dt.getTime() + COMPLETION_GRACE_MS <= nowMs;
+}
 function getDriverShift(driver, date) {
   if (!driver || typeof driver !== "object" || typeof driver.shiftStart !== "string" || typeof driver.shiftEnd !== "string") {
     return { available: false, start: "00:00", end: "00:00", note: "invalid driver record" };
@@ -1745,7 +1768,7 @@ function loadBookings() {
       // silently resurrected cancelled bookings as active on reload.
       status: b.status === "cancel" ? "cancelled" : ["cancelled", "noshow"].includes(b.status) ? b.status : void 0,
       cancelReason: b.status ? sanitize(b.cancelReason || "", 60) : void 0,
-      cancelFee: b.status ? sanitizeNumeric(b.cancelFee || "") : void 0,
+      cancelFee: b.status ? sanitizeNumeric(String(b.cancelFee || "")) : void 0,
       cancelFreeOfCharge: b.status ? b.cancelFreeOfCharge === true : void 0,
       cancelIsRebook: b.status ? b.cancelIsRebook === true : void 0,
       cancelledAt: b.status ? sanitize(b.cancelledAt || "", 30) : void 0,
@@ -2349,6 +2372,11 @@ function DispatcherApp({ session, onLogout }) {
   const [mapsApiKey, setMapsApiKey] = useState(() => loadMapsKey());
   const [mapsReady, setMapsReady] = useState(true);
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+  const [nowTs, setNowTs] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNowTs(Date.now()), 3e4);
+    return () => clearInterval(t);
+  }, []);
   const [archiveSearch, setArchiveSearch] = useState("");
   const [archiveType, setArchiveType] = useState("all");
   const [archiveFrom, setArchiveFrom] = useState("");
@@ -2488,7 +2516,8 @@ function DispatcherApp({ session, onLogout }) {
         ...b,
         status: canonicalStatus,
         cancelReason: reason,
-        cancelFee: fee,
+        cancelFee: String(fee),
+        // string — sanitizeNumeric() drops non-strings on reload
         cancelFreeOfCharge: waived,
         cancelIsRebook: isRebook,
         cancelledAt: (/* @__PURE__ */ new Date()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }),
@@ -2500,10 +2529,69 @@ function DispatcherApp({ session, onLogout }) {
     setCancelModal(null);
     setCancelReason("");
   }, []);
-  const archivedBookings = useMemo(() => {
-    const now = /* @__PURE__ */ new Date();
+  const todayInfo = useMemo(() => {
+    const now = new Date(nowTs);
     const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-    const tagged = bookings.filter((b) => b.status === "cancelled" || b.status === "noshow" || !b.status && b.date && b.date < todayStr).map((b) => ({ ...b, _archiveType: b.status === "noshow" ? "noshow" : b.status === "cancelled" ? "cancelled" : "past" }));
+    const todays = bookings.filter((b) => !b.status && b.date === todayStr);
+    const upcoming = todays.filter((b) => !isFinishedBooking(b, nowTs)).sort((a, b) => {
+      const ta = getBookingTime(a), tb = getBookingTime(b);
+      return (ta ? ta.getTime() : 0) - (tb ? tb.getTime() : 0);
+    });
+    const completed = todays.filter((b) => isFinishedBooking(b, nowTs));
+    const revenue = todays.reduce((s, b) => s + (Number(b.paymentAmount) || 0), 0);
+    let lookahead = null;
+    if (upcoming.length === 0) {
+      const future = bookings.filter((b) => !b.status && b.date > todayStr).sort((a, b) => a.date.localeCompare(b.date) || (getBookingTime(a) || 0) - (getBookingTime(b) || 0));
+      lookahead = future[0] || null;
+    }
+    return { todayStr, total: todays.length, upcoming, completed: completed.length, revenue, lookahead };
+  }, [bookings, nowTs]);
+  const minutesUntil = useCallback((b) => {
+    const dt = getBookingTime(b);
+    if (!dt) return null;
+    return Math.round((dt.getTime() - nowTs) / 6e4);
+  }, [nowTs]);
+  const formatCountdown = useCallback((mins) => {
+    if (mins === null) return "";
+    if (mins < -5) return "in progress";
+    if (mins < 0) return "now";
+    if (mins === 0) return "now";
+    if (mins < 60) return `in ${mins} min`;
+    const h = Math.floor(mins / 60), m = mins % 60;
+    return m === 0 ? `in ${h}h` : `in ${h}h ${m}m`;
+  }, []);
+  const fleetNow = useMemo(() => {
+    const now = new Date(nowTs);
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const nowMins = now.getHours() * 60 + now.getMinutes();
+    const all = [...DRIVERS, ...customDrivers];
+    const onShift = [], offShift = [], offToday = [];
+    all.forEach((d) => {
+      const s = getDriverShift(d, todayStr);
+      if (!s || !s.available) {
+        offToday.push({ driver: d, shift: s });
+        return;
+      }
+      const toM = (t) => {
+        const p = String(t || "").split(":");
+        const h = parseInt(p[0], 10), m = parseInt(p[1], 10);
+        return isNaN(h) || isNaN(m) ? null : h * 60 + m;
+      };
+      const st = toM(s.start), en0 = toM(s.end);
+      if (st === null || en0 === null) {
+        offToday.push({ driver: d, shift: s });
+        return;
+      }
+      const en = en0 === 0 ? 1440 : en0;
+      const active = en > st ? nowMins >= st && nowMins < en : nowMins >= st || nowMins < en;
+      const load = bookings.filter((b) => !b.status && b.date === todayStr && b.driverNumber === d.id).length;
+      (active ? onShift : offShift).push({ driver: d, shift: s, load });
+    });
+    onShift.sort((a, b) => a.load - b.load || a.driver.id.localeCompare(b.driver.id));
+    return { onShift, offShift, offToday, todayStr };
+  }, [bookings, customDrivers, nowTs]);
+  const archivedBookings = useMemo(() => {
+    const tagged = bookings.filter((b) => b.status === "cancelled" || b.status === "noshow" || isFinishedBooking(b, nowTs)).map((b) => ({ ...b, _archiveType: b.status === "noshow" ? "noshow" : b.status === "cancelled" ? "cancelled" : "past" }));
     let result = tagged;
     if (archiveType !== "all") result = result.filter((b) => b._archiveType === archiveType);
     if (archiveFrom) result = result.filter((b) => b.date >= archiveFrom);
@@ -2517,11 +2605,9 @@ function DispatcherApp({ session, onLogout }) {
       return parseInt(x.split(":")[0]) * 60 + parseInt(x.split(":")[1]);
     };
     return result.sort((a, b) => (b.date || "").localeCompare(a.date || "") || toMins(b.timeSlot) - toMins(a.timeSlot));
-  }, [bookings, archiveType, archiveFrom, archiveTo, archiveSearch]);
+  }, [bookings, archiveType, archiveFrom, archiveTo, archiveSearch, nowTs]);
   const archiveStats = useMemo(() => {
-    const now = /* @__PURE__ */ new Date();
-    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-    const all = bookings.filter((b) => b.status === "cancelled" || b.status === "noshow" || !b.status && b.date && b.date < todayStr);
+    const all = bookings.filter((b) => b.status === "cancelled" || b.status === "noshow" || isFinishedBooking(b, nowTs));
     return {
       total: all.length,
       past: all.filter((b) => !b.status).length,
@@ -2530,7 +2616,7 @@ function DispatcherApp({ session, onLogout }) {
       fees: all.reduce((s, b) => s + (Number(b.cancelFee) || 0), 0),
       revenue: all.filter((b) => !b.status).reduce((s, b) => s + (Number(b.paymentAmount) || 0), 0)
     };
-  }, [bookings]);
+  }, [bookings, nowTs]);
   const handleRestoreBooking = useCallback((id) => {
     setBookings((prev) => prev.map((b) => b.id !== id ? b : {
       ...b,
@@ -3683,7 +3769,7 @@ function DispatcherApp({ session, onLogout }) {
     setView("booking");
   };
   const filteredBookings = useMemo(() => {
-    let result = bookings.filter((b) => !b.status);
+    let result = bookings.filter((b) => !b.status && !isFinishedBooking(b, nowTs));
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       result = result.filter(
@@ -3718,7 +3804,7 @@ function DispatcherApp({ session, onLogout }) {
       };
       return mins(a.timeSlot) - mins(b.timeSlot);
     });
-  }, [bookings, searchQuery, filters]);
+  }, [nowTs, bookings, searchQuery, filters]);
   const groupedBookings = useMemo(() => {
     const weekday = [], weekend = [];
     filteredBookings.forEach((b) => {
@@ -4829,7 +4915,13 @@ function DispatcherApp({ session, onLogout }) {
     "LOAD 100 MORE (",
     archivedBookings.length - archivePage,
     " remaining)"
-  )), view === "customers" && /* @__PURE__ */ React.createElement("div", { style: { padding: "16px 16px 0" } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, fontWeight: 700, color: "var(--green)", marginBottom: 14, letterSpacing: "0.1em", fontFamily: "var(--mono)" } }, "CUSTOMER HISTORY"), /* @__PURE__ */ React.createElement(CustomerHistoryView, { bookings })), view === "dashboard" && /* @__PURE__ */ React.createElement("div", { className: "card-enter" }, /* @__PURE__ */ React.createElement("h2", { style: { fontSize: 20, fontWeight: 700, color: "#fff", marginBottom: 16 } }, "\u{1F4CA} Bookings Dashboard"), (() => {
+  )), view === "customers" && /* @__PURE__ */ React.createElement("div", { style: { padding: "16px 16px 0" } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 14, fontWeight: 700, color: "var(--green)", marginBottom: 14, letterSpacing: "0.1em", fontFamily: "var(--mono)" } }, "CUSTOMER HISTORY"), /* @__PURE__ */ React.createElement(CustomerHistoryView, { bookings })), view === "dashboard" && todayInfo.total > 0 && (() => {
+    const next = todayInfo.upcoming[0];
+    const rest = todayInfo.upcoming.slice(1, 3);
+    const mins = next ? minutesUntil(next) : null;
+    const inProgress = mins !== null && mins < 0;
+    return /* @__PURE__ */ React.createElement("div", { style: { padding: "16px 16px 0" } }, /* @__PURE__ */ React.createElement("div", { style: { background: "var(--bg-0)", border: "1px solid var(--border-0)", borderRadius: 10, padding: 14, marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, letterSpacing: "0.1em", color: "var(--green)", fontWeight: 700, fontFamily: "var(--mono)" } }, "TODAY \xB7 ", new Date(nowTs).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }).toUpperCase()), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, letterSpacing: "0.06em", color: "var(--text-3)", fontFamily: "var(--mono)" } }, todayInfo.upcoming.length, " OF ", todayInfo.total, " REMAINING")), next ? /* @__PURE__ */ React.createElement("div", { style: { background: "var(--bg-1)", border: "1px solid var(--amber-border)", borderLeft: "3px solid var(--amber)", padding: "12px 14px", marginBottom: rest.length ? 8 : 0 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginBottom: 6 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, letterSpacing: "0.1em", color: "var(--amber)", fontWeight: 700, fontFamily: "var(--mono)" } }, inProgress ? "IN PROGRESS" : "NEXT UP", " \xB7 ", formatCountdown(mins).toUpperCase()), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "var(--text-3)", fontFamily: "var(--mono)" } }, "DRIVER ", next.driverNumber || "\u2014")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 20, color: "var(--amber)", fontWeight: 700, fontFamily: "var(--mono)" } }, next.timeSlot), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 15, color: "var(--text-1)", fontWeight: 600 } }, next.customerName), next.paymentAmount && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 15, color: "var(--amber)", marginLeft: "auto", fontFamily: "var(--mono)" } }, "$", next.paymentAmount)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--text-2)", marginTop: 5 } }, next.pickupAddress || "\u2014", " ", /* @__PURE__ */ React.createElement("span", { style: { color: "var(--border-1)" } }, "\u2192"), " ", next.dropoffAddress || "\u2014", next.flightNumber ? /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-3)" } }, " \xB7 ", next.flightNumber, next.flightArrival ? ` arr ${next.flightArrival}` : "") : null)) : /* @__PURE__ */ React.createElement("div", { style: { background: "var(--bg-1)", border: "1px solid var(--border-0)", padding: "12px 14px", fontSize: 13, color: "var(--text-2)" } }, "\u2705 All of today's rides are done.", todayInfo.lookahead && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-3)" } }, " Next: ", todayInfo.lookahead.date, " ", todayInfo.lookahead.timeSlot, " \u2014 ", todayInfo.lookahead.customerName)), rest.map((b) => /* @__PURE__ */ React.createElement("div", { key: b.id, style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, padding: "9px 14px", borderBottom: "1px solid var(--bg-2)" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, color: "var(--text-2)", minWidth: 66, fontFamily: "var(--mono)" } }, b.timeSlot), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, color: "var(--text-1)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, b.customerName), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "var(--text-3)", fontFamily: "var(--mono)" } }, formatCountdown(minutesUntil(b))), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "var(--text-3)", minWidth: 52, textAlign: "right", fontFamily: "var(--mono)" } }, "DRV ", b.driverNumber || "\u2014"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--border-0)" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, letterSpacing: "0.06em", color: "var(--text-3)", fontFamily: "var(--mono)" } }, todayInfo.completed, " COMPLETED \xB7 $", todayInfo.revenue, " BOOKED TODAY"), todayInfo.completed > 0 && /* @__PURE__ */ React.createElement("button", { onClick: () => setView("archive"), title: "See completed rides in Archive", style: { background: "transparent", border: "none", color: "var(--green)", fontSize: 11, letterSpacing: "0.06em", cursor: "pointer", fontFamily: "var(--mono)", padding: 0 } }, "VIEW COMPLETED \u2192"))));
+  })(), view === "dashboard" && /* @__PURE__ */ React.createElement("div", { className: "card-enter" }, /* @__PURE__ */ React.createElement("h2", { style: { fontSize: 20, fontWeight: 700, color: "#fff", marginBottom: 16 } }, "\u{1F4CA} Bookings Dashboard"), (() => {
     const now = /* @__PURE__ */ new Date();
     const weekStart = new Date(now);
     weekStart.setDate(now.getDate() - now.getDay());
@@ -4932,7 +5024,34 @@ function DispatcherApp({ session, onLogout }) {
       },
       "\u21A9 Restore to Active"
     ))));
-  })(), filteredBookings.length > dashPage && /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", padding: "16px 0" } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setDashPage((p) => p + 50), style: { padding: "9px 24px", borderRadius: 8, border: "1px solid var(--border-1)", background: "transparent", color: "var(--text-2)", fontSize: 14, cursor: "pointer", fontFamily: "inherit" } }, "Load more (", filteredBookings.length - dashPage, " remaining)")), filteredBookings.length === 0 && /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", padding: 48, color: "#909aaa" } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 36 } }, "\u{1F4ED}"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 15, marginTop: 8 } }, "No bookings found"))), view === "drivers" && /* @__PURE__ */ React.createElement("div", { className: "card-enter" }, /* @__PURE__ */ React.createElement("h2", { style: { fontSize: 20, fontWeight: 700, color: "var(--text-1)", marginBottom: 16 } }, "Driver Database"), (() => {
+  })(), filteredBookings.length > dashPage && /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", padding: "16px 0" } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setDashPage((p) => p + 50), style: { padding: "9px 24px", borderRadius: 8, border: "1px solid var(--border-1)", background: "transparent", color: "var(--text-2)", fontSize: 14, cursor: "pointer", fontFamily: "inherit" } }, "Load more (", filteredBookings.length - dashPage, " remaining)")), filteredBookings.length === 0 && /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", padding: 48, color: "#909aaa" } }, /* @__PURE__ */ React.createElement("p", { style: { fontSize: 36 } }, "\u{1F4ED}"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 15, marginTop: 8 } }, "No bookings found"))), view === "drivers" && /* @__PURE__ */ React.createElement("div", { className: "card-enter" }, /* @__PURE__ */ React.createElement("h2", { style: { fontSize: 20, fontWeight: 700, color: "var(--text-1)", marginBottom: 16 } }, "Driver Database"), /* @__PURE__ */ React.createElement("div", { style: { background: "var(--bg-0)", border: "1px solid var(--border-0)", borderRadius: 10, padding: 14, marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap", marginBottom: 10 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, letterSpacing: "0.1em", color: "var(--green)", fontWeight: 700, fontFamily: "var(--mono)" } }, "ON SHIFT NOW \xB7 ", new Date(nowTs).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, letterSpacing: "0.06em", color: "var(--text-3)", fontFamily: "var(--mono)" } }, fleetNow.onShift.length, " ON \xB7 ", fleetNow.offShift.length, " OFF-HOURS \xB7 ", fleetNow.offToday.length, " OFF TODAY")), fleetNow.onShift.length === 0 ? /* @__PURE__ */ React.createElement("p", { style: { fontSize: 13, color: "var(--text-3)", margin: 0 } }, "No drivers on shift right now.") : /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } }, fleetNow.onShift.map(({ driver, shift, load }) => /* @__PURE__ */ React.createElement(
+    "div",
+    {
+      key: driver.id,
+      title: `Shift ${formatShiftDisplay(shift.start, shift.end)} \xB7 ${load} ride(s) booked today`,
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        padding: "6px 10px",
+        borderRadius: 8,
+        background: "var(--bg-1)",
+        border: `1px solid ${load === 0 ? "var(--green-dim)" : "var(--border-0)"}`
+      }
+    },
+    /* @__PURE__ */ React.createElement("span", { style: { fontSize: 14, fontWeight: 700, color: "var(--green)", fontFamily: "var(--mono)" } }, driver.id),
+    /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, color: "var(--text-3)", fontFamily: "var(--mono)" } }, formatShiftDisplay(shift.start, shift.end)),
+    /* @__PURE__ */ React.createElement("span", { style: {
+      fontSize: 10,
+      fontWeight: 700,
+      fontFamily: "var(--mono)",
+      padding: "1px 6px",
+      borderRadius: 4,
+      background: load === 0 ? "var(--green-glow)" : "var(--amber-glow)",
+      color: load === 0 ? "var(--green)" : "var(--amber)"
+    } }, load),
+    !driver.airportPickup && !driver.airportDropoff && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 9, color: "var(--text-3)", fontFamily: "var(--mono)" } }, "NO-APT")
+  ))), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 10, color: "var(--text-3)", fontFamily: "var(--mono)", marginTop: 8, marginBottom: 0 } }, "SORTED BY LIGHTEST LOAD \xB7 NUMBER = RIDES BOOKED TODAY")), (() => {
     const saveCustom = (arr) => {
       setCustomDrivers(arr);
       try {
