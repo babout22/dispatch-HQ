@@ -1,10 +1,13 @@
-// Netlify Function — Places Autocomplete (New) proxy
-// Uses the actual "Places API (New)" endpoint (POST + JSON), which is the
-// only Google Places tier that supports a real locationRestriction.rectangle
-// hard filter. The legacy `maps/api/place/autocomplete/json` GET endpoint
-// (previously used here) does NOT recognize a rectangle restriction — it
-// silently ignores unknown query params, which is why an earlier attempt at
-// this fix compiled and ran with no error but filtered nothing at all.
+// Netlify Function — Places Autocomplete proxy
+// REVERTED to the legacy Autocomplete API (the version that was working
+// before an attempt to hard-restrict results to NY+NJ). That attempt moved
+// to Google's "Places API (New)", which requires a SEPARATE enablement in
+// Google Cloud Console from the legacy "Places API" this project has always
+// used — if that new product isn't enabled, Google rejects every request,
+// and the client's blanket `catch { setSuggestions([]) }` swallows the
+// failure completely silently (no error shown, dropdown just never
+// populates). This is almost certainly why address suggestions stopped
+// working. Restoring the known-working legacy endpoint here.
 exports.handler = async (event) => {
   const headers = {
     "Access-Control-Allow-Origin": "*",
@@ -25,63 +28,23 @@ exports.handler = async (event) => {
     return { statusCode: 500, headers, body: JSON.stringify({ error: "Maps key not configured" }) };
   }
 
-  // NY + NJ hard-restriction rectangle. Verified to fully contain
-  // NY (40.4774–45.0159, -79.7624–-71.7517) and NJ (38.7880–41.3574,
-  // -75.5595–-73.8850) with an ~0.08° margin at every extreme corner.
-  // Corners necessarily spill slightly into bordering PA/CT/MA/VT —
-  // Google's rectangle restriction has no arbitrary-polygon option, so this
-  // is the closest achievable fit to "NY and NJ only".
-  const body = {
-    input: input.trim(),
-    includedRegionCodes: ["us"],
-    locationRestriction: {
-      rectangle: {
-        low:  { latitude: 38.70, longitude: -79.90 },
-        high: { latitude: 45.10, longitude: -71.70 }
-      }
-    }
-  };
-
   try {
-    const resp = await fetch("https://places.googleapis.com/v1/places:autocomplete", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Goog-Api-Key": key
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(5000)
-    });
+    const resp = await fetch(
+      `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(input.trim())}&components=country:us&types=geocode|establishment&key=${key}`,
+      { signal: AbortSignal.timeout(5000) }
+    );
     const data = await resp.json();
 
-    if (!resp.ok) {
-      return { statusCode: 502, headers, body: JSON.stringify({ error: (data.error && data.error.message) || "Places API error", predictions: [] }) };
+    if (data.status !== "OK" && data.status !== "ZERO_RESULTS") {
+      return { statusCode: 502, headers, body: JSON.stringify({ error: data.error_message || data.status || "Places API error", predictions: [] }) };
     }
 
-    // Map the New API's { suggestions: [{ placePrediction: {...} }] } shape
-    // back to the { predictions: [...] } shape the client already expects,
-    // so AddressField needs zero changes. Defensive: a single malformed or
-    // null entry in Google's array must not kill the whole response — skip
-    // it and keep the good ones (same principle as the driver/voice hardening
-    // elsewhere in this app: never trust external data to be well-shaped).
-    const predictions = (Array.isArray(data.suggestions) ? data.suggestions : [])
-      .filter(s => {
-        const pp = s && typeof s === "object" ? s.placePrediction : null;
-        if (!pp || typeof pp !== "object") return false;
-        // Require actual usable content — an empty {} object is shape-valid
-        // but would render as a blank row in the dropdown.
-        return !!(pp.placeId || (pp.text && pp.text.text));
-      })
-      .slice(0, 5)
-      .map(s => {
-        const pp = s.placePrediction;
-        return {
-          description: (pp.text && pp.text.text) || "",
-          place_id: pp.placeId || "",
-          main_text: (pp.structuredFormat && pp.structuredFormat.mainText && pp.structuredFormat.mainText.text) || (pp.text && pp.text.text) || "",
-          secondary_text: (pp.structuredFormat && pp.structuredFormat.secondaryText && pp.structuredFormat.secondaryText.text) || ""
-        };
-      });
+    const predictions = (data.predictions || []).slice(0, 5).map(p => ({
+      description: p.description || "",
+      place_id: p.place_id || "",
+      main_text: (p.structured_formatting && p.structured_formatting.main_text) || p.description || "",
+      secondary_text: (p.structured_formatting && p.structured_formatting.secondary_text) || ""
+    }));
 
     return { statusCode: 200, headers, body: JSON.stringify({ predictions }) };
   } catch (e) {
