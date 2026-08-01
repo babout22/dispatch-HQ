@@ -5,7 +5,9 @@ exports.handler = async (event) => {
   const key = process.env.AVIATIONSTACK_KEY;
   if (!key) return { statusCode: 500, headers: h, body: JSON.stringify({ error: "No key" }) };
   try {
-    const url = "http://api.aviationstack.com/v1/flights?access_key=" + key + "&flight_iata=" + flight.trim().toUpperCase() + "&limit=1";
+    // HTTPS — AviationStack confirms 256-bit SSL is supported on all tiers
+    // (not paid-only). The previous http:// sent the API key in plaintext.
+    const url = "https://api.aviationstack.com/v1/flights?access_key=" + key + "&flight_iata=" + flight.trim().toUpperCase() + "&limit=1";
     const resp = await fetch(url);
     const data = await resp.json();
     if (!data.data || !data.data.length) return { statusCode: 200, headers: h, body: JSON.stringify({ found: false }) };
